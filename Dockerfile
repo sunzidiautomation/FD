@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir \
 
 COPY pyproject.toml ./
 COPY flair_t2i/ ./flair_t2i/
+COPY data/ ./data/
 COPY tests/ ./tests/
 COPY scripts/ ./scripts/
 

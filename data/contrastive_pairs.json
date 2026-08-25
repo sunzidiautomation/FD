@@ -1,0 +1,51 @@
+{
+  "color": [
+    {"base": "a red sports car on a road", "changed": "a blue sports car on a road", "object_label": "sports car"},
+    {"base": "a green ceramic vase on a table", "changed": "a yellow ceramic vase on a table", "object_label": "ceramic vase"},
+    {"base": "a black leather chair in a room", "changed": "a white leather chair in a room", "object_label": "leather chair"},
+    {"base": "a crimson wooden door in a wall", "changed": "a purple wooden door in a wall", "object_label": "wooden door"},
+    {"base": "a brown canvas backpack on grass", "changed": "a pink canvas backpack on grass", "object_label": "canvas backpack"}
+  ],
+  "size": [
+    {"base": "a small sports car on a road", "changed": "a large sports car on a road", "object_label": "sports car"},
+    {"base": "a tiny ceramic vase on a table", "changed": "a huge ceramic vase on a table", "object_label": "ceramic vase"},
+    {"base": "a compact wooden boat on water", "changed": "a massive wooden boat on water", "object_label": "wooden boat"},
+    {"base": "a miniature stone statue in a park", "changed": "a massive stone statue in a park", "object_label": "stone statue"},
+    {"base": "a petite glass bottle on a shelf", "changed": "a large glass bottle on a shelf", "object_label": "glass bottle"}
+  ],
+  "lighting": [
+    {"base": "a sports car under warm evening light", "changed": "a sports car under cool evening light", "object_label": "sports car"},
+    {"base": "a ceramic vase in bright daylight indoors", "changed": "a ceramic vase in dim daylight indoors", "object_label": "ceramic vase"},
+    {"base": "a wooden chair beside a sunlit window frame", "changed": "a wooden chair beside a candlelit window frame", "object_label": "wooden chair"},
+    {"base": "a stone statue under harsh afternoon light", "changed": "a stone statue under soft afternoon light", "object_label": "stone statue"},
+    {"base": "a glass bottle on a neon lit counter", "changed": "a glass bottle on a golden lit counter", "object_label": "glass bottle"}
+  ],
+  "texture": [
+    {"base": "a rusty metal sign on a wall", "changed": "a polished metal sign on a wall", "object_label": "metal sign"},
+    {"base": "a smooth ceramic vase on a table", "changed": "a cracked ceramic vase on a table", "object_label": "ceramic vase"},
+    {"base": "a glossy sports car on a road", "changed": "a matte sports car on a road", "object_label": "sports car"},
+    {"base": "a woven cotton bag on a bench", "changed": "a furry cotton bag on a bench", "object_label": "cotton bag"},
+    {"base": "a weathered wooden door in a wall", "changed": "a shiny wooden door in a wall", "object_label": "wooden door"}
+  ],
+  "identity": [
+    {"base": "a sedan parked on a road", "changed": "a tractor parked on a road", "object_label": "sedan"},
+    {"base": "a vase resting on a table", "changed": "a typewriter resting on a table", "object_label": "vase"},
+    {"base": "a chair beside a window", "changed": "a refrigerator beside a window", "object_label": "chair"},
+    {"base": "a statue standing in a park", "changed": "a lighthouse standing in a park", "object_label": "statue"},
+    {"base": "a bottle placed on a shelf", "changed": "a helmet placed on a shelf", "object_label": "bottle"}
+  ],
+  "style": [
+    {"base": "a photorealistic sports car on a road", "changed": "a cartoon sports car on a road", "object_label": "sports car"},
+    {"base": "a vintage ceramic vase on a table", "changed": "a futuristic ceramic vase on a table", "object_label": "ceramic vase"},
+    {"base": "a watercolor wooden chair in a room", "changed": "a cyberpunk wooden chair in a room", "object_label": "wooden chair"},
+    {"base": "a minimalist stone statue in a park", "changed": "a baroque stone statue in a park", "object_label": "stone statue"},
+    {"base": "a sketch glass bottle on a shelf", "changed": "a photorealistic glass bottle on a shelf", "object_label": "glass bottle"}
+  ],
+  "action": [
+    {"base": "a sports car driving along a road", "changed": "a sports car parked along a road", "object_label": "sports car", "phrase": "a car driving"},
+    {"base": "a brown horse running across a field", "changed": "a brown horse grazing across a field", "object_label": "brown horse", "phrase": "a horse running"},
+    {"base": "a small bird flying above a lake", "changed": "a small bird floating above a lake", "object_label": "small bird", "phrase": "a bird flying"},
+    {"base": "a young person jumping near a wall", "changed": "a young person standing near a wall", "object_label": "young person", "phrase": "a person jumping"},
+    {"base": "a wooden boat sailing across water", "changed": "a wooden boat moored across water", "object_label": "wooden boat", "phrase": "a boat sailing"}
+  ]
+}
