@@ -2,6 +2,8 @@
 
 How the code runs, in execution order, and how to get an image out of it.
 
+For the same thing as a call tree with line numbers, see **[EXECUTION_TREE.md](EXECUTION_TREE.md)**.
+
 **Status:** Tasks 1-16b implemented, 175 tests passing. Tasks 17-22 (evaluation, ablations) planned, not built.
 
 ## What runs where
