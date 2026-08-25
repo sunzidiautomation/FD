@@ -1,0 +1,80 @@
+import numpy as np
+import pytest
+from PIL import Image
+
+from flair_t2i.metrics.embedding import (
+    action_delta,
+    clip_norm,
+    identity_delta,
+    style_delta,
+)
+
+FULL = np.ones((64, 64), dtype=np.float32)
+
+
+def _solid(rgb):
+    return Image.new("RGB", (64, 64), rgb)
+
+
+class FakeScorer:
+    """Maps an image to a unit vector derived from its mean colour."""
+
+    def image_embedding(self, image):
+        mean = np.asarray(image.convert("RGB"), dtype=np.float64).mean(axis=(0, 1))
+        norm = np.linalg.norm(mean)
+        return mean / norm if norm else mean
+
+    def image_text_similarity(self, image, texts):
+        base = float(self.image_embedding(image)[0])
+        return np.array([0.15 + 0.2 * base * (i + 1) for i in range(len(texts))])
+
+
+def test_clip_norm_maps_the_documented_range_onto_the_unit_interval():
+    assert clip_norm(0.15) == pytest.approx(0.0)
+    assert clip_norm(0.35) == pytest.approx(1.0)
+    assert clip_norm(0.25) == pytest.approx(0.5)
+
+
+def test_clip_norm_clamps_outside_the_range():
+    assert clip_norm(-1.0) == 0.0
+    assert clip_norm(2.0) == 1.0
+
+
+def test_identity_delta_of_identical_images_is_zero():
+    image = _solid((200, 100, 50))
+    assert identity_delta(image, image, FULL, FakeScorer()) == pytest.approx(0.0)
+
+
+def test_identity_delta_grows_for_different_images():
+    delta = identity_delta(
+        _solid((250, 10, 10)), _solid((10, 10, 250)), FULL, FakeScorer()
+    )
+    assert delta > 0.05
+
+
+def test_identity_delta_stays_within_the_unit_interval():
+    delta = identity_delta(_solid((255, 0, 0)), _solid((0, 0, 255)), FULL, FakeScorer())
+    assert 0.0 <= delta <= 1.0
+
+
+def test_style_delta_of_identical_images_is_zero():
+    image = _solid((120, 120, 120))
+    assert style_delta(image, image, FULL, FakeScorer()) == pytest.approx(0.0)
+
+
+def test_action_delta_of_identical_images_is_zero():
+    image = _solid((120, 120, 120))
+    assert action_delta(
+        image, image, FULL, FakeScorer(), "a car driving"
+    ) == pytest.approx(0.0)
+
+
+def test_action_delta_responds_to_a_changed_image():
+    delta = action_delta(
+        _solid((255, 200, 200)),
+        _solid((10, 10, 10)),
+        FULL,
+        FakeScorer(),
+        "a car driving",
+    )
+    assert delta > 0.0
