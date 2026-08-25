@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir \
         scipy \
         scikit-fuzzy \
         spacy \
+        pillow \
     && python -m spacy download en_core_web_sm
 
 COPY pyproject.toml ./

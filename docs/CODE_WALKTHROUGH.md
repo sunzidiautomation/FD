@@ -42,7 +42,8 @@ Kaggle: **`notebooks/flair_kaggle.ipynb`**.
 | 11 | `flair_t2i/guard.py` | Coherence checks, α back-off | per prompt |
 | 12 | `flair_t2i/patching.py` | Installs/removes processors; `bypass_blocks` | per generation |
 | 13 | `flair_t2i/processor.py` | `PlanRef`, `FlairJointProcessor` — the hook | **per block per step** |
-| 14 | `flair_t2i/schedule.py` | `timestep_scale()` — early strong, late weak | **per block per step** |
+| 14 | `flair_t2i/artifacts.py` | Run records, manifest, provenance | after each generation |
+| 15 | `flair_t2i/schedule.py` | `timestep_scale()` — early strong, late weak | **per block per step** |
 
 Rows 10, 13, 14 run in the hot loop: `steps × blocks` times per image (20 steps × 24 blocks ≈ 480 calls).
 
@@ -146,7 +147,29 @@ H_ℓ = H_base + Σᵢ αᵢ(t) · (Hᵢ − H_base)
         config.py   basm.py    hedges.py     schedule.py   guard.py
 ```
 
-### Phase D · Teardown
+### Phase D · Saving the result
+
+```
+describe_plan(fp.last_plan, fp.last_guard)      artifacts.py
+save_run(out_dir, RunRecord(...), image)
+├─ outputs/<run_id>.png       the image
+├─ outputs/<run_id>.json      prompt, seed, config, routing plan, guard
+│                             events, git commit, package versions
+└─ outputs/manifest.jsonl     one appended line per run
+```
+
+An image alone is not a result — six months on you need to know *which* BASM,
+*which* α₀, *which* blocks, *which* commit produced it. Every generation
+carries that. The manifest is append-only so an interrupted Kaggle session
+still leaves every completed run readable.
+
+```python
+from flair_t2i.artifacts import summarise, load_manifest
+print(summarise("outputs"))          # one line per run
+records = load_manifest("outputs")   # full records, for analysis
+```
+
+### Phase E · Teardown
 
 ```
 finally: uninstall_flair(handles)     patching.py — always restores originals

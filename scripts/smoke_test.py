@@ -8,19 +8,25 @@ SD3.5-M weights. It uses an UNCALIBRATED uniform BASM, so the images prove
 the plumbing works, not that routing helps. Real BASM values arrive in
 Week 3.
 
-Record the two numbers this prints -- N_BLOCKS and the baseline generation
-time -- in calibration_runs/measurements.txt. The calibration campaign's
-parameters are derived from them (see the master roadmap, section 2).
+Every generation is saved with its full provenance (prompt, seed, config,
+routing plan, guard events, git commit, package versions) so the images
+stay interpretable months later -- see flair_t2i/artifacts.py.
+
+Record the two numbers this prints -- N_BLOCKS and T_GEN -- in
+calibration_runs/measurements.txt. The calibration campaign's parameters
+are derived from them (master roadmap, section 2).
 """
 
 import argparse
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import spacy
 import torch
 from diffusers import StableDiffusion3Pipeline
 
+from flair_t2i.artifacts import RunRecord, describe_plan, save_run, summarise
 from flair_t2i.attributes import CORE_ATTRIBUTES
 from flair_t2i.basm import BASM
 from flair_t2i.config import FlairConfig
@@ -34,6 +40,8 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=Path("outputs"))
+    parser.add_argument("--tag", default="smoke", help="prefix for run ids")
+    parser.add_argument("--basm", type=Path, help="a calibrated basm.npz")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -46,33 +54,72 @@ def main() -> None:
     n_blocks = len(pipe.transformer.transformer_blocks)
     print(f"N_BLOCKS = {n_blocks}")
 
-    basm = BASM.uniform(tuple(range(n_blocks)), CORE_ATTRIBUTES)
+    if args.basm:
+        basm = BASM.load(args.basm)
+        basm_source = f"calibrated:{args.basm}"
+    else:
+        basm = BASM.uniform(tuple(range(n_blocks)), CORE_ATTRIBUTES)
+        basm_source = "uniform (UNCALIBRATED placeholder)"
+    print(f"BASM     {basm_source}")
+
     fp = FlairPipeline(pipe, cfg, basm, nlp=spacy.load("en_core_web_sm"))
 
+    def record_run(run_id: str, prompt: str, image, routing: bool, fuzzy: bool):
+        described = describe_plan(fp.last_plan, fp.last_guard)
+        save_run(
+            args.out,
+            RunRecord(
+                run_id=run_id,
+                prompt=prompt,
+                seed=args.seed,
+                steps=args.steps,
+                guidance_scale=4.5,
+                routing=routing,
+                fuzzy=fuzzy,
+                basm_source=basm_source,
+                config=asdict(cfg),
+                tag=args.tag,
+                **described,
+            ),
+            image=image,
+        )
+
+    # --- baseline (routing off) -----------------------------------------
     started = time.perf_counter()
     baseline = fp.generate(PROMPT, seed=args.seed, steps=args.steps, routing=False)
     t_gen = time.perf_counter() - started
-    baseline.save(args.out / "smoke_baseline.png")
+    record_run(f"{args.tag}_baseline", PROMPT, baseline, routing=False, fuzzy=False)
     print(f"T_GEN = {t_gen:.1f}s  (one {args.steps}-step generation)")
 
+    # --- routed ----------------------------------------------------------
     routed = fp.generate(PROMPT, seed=args.seed, steps=args.steps, routing=True)
-    routed.save(args.out / "smoke_routed.png")
+    record_run(f"{args.tag}_routed", PROMPT, routed, routing=True, fuzzy=True)
 
     assert fp.last_plan is not None, "routing produced no plan"
     print(f"routed components: {[rc.component.id for rc in fp.last_plan.routed]}")
     print(f"blocks touched:    {sorted(fp.last_plan.blocks_touched())}")
     print(f"guard events:      {len(fp.last_guard.events)}")
 
+    # --- hedge ladder ----------------------------------------------------
+    print("\nhedge ladder:")
     for hedge in ["slightly", "", "very"]:
         text = f"A {hedge} small red sports car under warm evening light".replace(
             "  ", " "
         )
         image = fp.generate(text, seed=args.seed, steps=args.steps)
         name = hedge or "plain"
-        image.save(args.out / f"smoke_hedge_{name}.png")
+        record_run(f"{args.tag}_hedge_{name}", text, image, routing=True, fuzzy=True)
         intensity = fp.last_plan.routed[0].intensity if fp.last_plan.routed else None
         print(f"  {name:<9} intensity={intensity}")
 
+    # --- the measurements the campaign budget needs ----------------------
+    runs = Path("calibration_runs")
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / "measurements.txt").write_text(
+        f"N_BLOCKS={n_blocks}\nT_GEN={t_gen:.2f}\nSTEPS={args.steps}\n"
+    )
+    print(f"\nwrote {runs / 'measurements.txt'}")
+    print(f"\n{summarise(args.out)}")
     print("\nSmoke test passed.")
 
 
