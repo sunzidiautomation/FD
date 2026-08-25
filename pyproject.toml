@@ -9,3 +9,15 @@ include = ["flair_t2i*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests use `pytest.importorskip("torch")` before importing torch-dependent modules
+"tests/*.py" = ["E402"]

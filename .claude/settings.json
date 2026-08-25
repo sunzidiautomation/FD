@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(grep -oP '\"file_path\"\\s*:\\s*\"\\K[^\"]+' | sed 's/\\\\\\\\/\\//g'); case \"$f\" in *.py) \"C:/Users/sunzi/AppData/Local/Microsoft/WinGet/Packages/astral-sh.ruff_Microsoft.Winget.Source_8wekyb3d8bbwe/ruff.exe\" check \"$f\" ;; esac; true"
+          }
+        ]
+      }
+    ]
+  }
+}
