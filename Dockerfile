@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir \
         numpy \
         scipy \
         scikit-fuzzy \
+        scikit-image \
         spacy \
         pillow \
     && python -m spacy download en_core_web_sm
