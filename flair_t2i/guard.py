@@ -1,8 +1,8 @@
 """Runtime coherence guard (spec section 3.6).
 
-Two checks are specified. The cross-stream cosine check lives here and is
-crisp. The attribute-distortion check becomes a fuzzy-membership
-evaluation once the fuzzy module lands -- see Task 10.
+Two checks are specified: a crisp cross-stream cosine check, and an
+attribute-distortion check that evaluates membership in the intended fuzzy
+region rather than a percentile band.
 """
 
 from __future__ import annotations
@@ -12,7 +12,9 @@ from itertools import combinations
 
 import torch
 
+from .attributes import AttributeClass
 from .config import FlairConfig
+from .fuzzy.membership import membership_at
 from .routing import RoutingPlan
 
 
@@ -45,6 +47,23 @@ class CoherenceGuard:
         if worst >= self.cfg.guard_cos_threshold:
             return None
         return GuardEvent(step=step, reason="cross_stream_similarity", value=worst)
+
+    def check_membership(
+        self,
+        attr: AttributeClass,
+        label: str,
+        measured: float,
+        step: int,
+    ) -> GuardEvent | None:
+        """Flag a measured metric that has left its intended fuzzy region.
+
+        This replaces the crisp percentile band described in the reference
+        design (spec section 3.6) with a graded membership evaluation.
+        """
+        mu = membership_at(attr, label, measured)
+        if mu >= self.cfg.guard_membership_threshold:
+            return None
+        return GuardEvent(step=step, reason="attribute_membership", value=mu)
 
     def apply(self, plan: RoutingPlan, event: GuardEvent | None) -> None:
         if event is None:

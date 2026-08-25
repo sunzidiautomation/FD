@@ -12,6 +12,7 @@ import torch
 from .basm import BASM
 from .components import Component
 from .config import FlairConfig
+from .fuzzy.resolve import resolve_components
 from .guard import CoherenceGuard
 from .parsing import parse_prompt
 from .patching import install_flair, uninstall_flair
@@ -50,6 +51,7 @@ class FlairPipeline:
         steps: int = 20,
         guidance_scale: float = 4.5,
         routing: bool = True,
+        fuzzy: bool = True,
     ):
         self.last_plan = None
         self.last_guard = None
@@ -60,7 +62,15 @@ class FlairPipeline:
             components = parse_prompt(prompt, self.nlp)
             routable = [c for c in components if c.attr in self.basm.attributes]
             embeddings = self.encode_components(routable)
-            plan = build_routing_plan(routable, embeddings, self.basm, self.cfg)
+
+            if fuzzy:
+                intensities, k_overrides, _ = resolve_components(routable)
+            else:
+                intensities, k_overrides = {}, {}
+
+            plan = build_routing_plan(
+                routable, embeddings, self.basm, self.cfg, intensities, k_overrides
+            )
             if plan.routed:
                 ref.plan = plan
                 self.last_plan = plan
