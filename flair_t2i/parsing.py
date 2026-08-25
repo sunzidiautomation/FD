@@ -79,6 +79,21 @@ def _hedge_for(token) -> str | None:
     return None
 
 
+def _fallback_identity(doc) -> str:
+    """Head noun for prompts spaCy gives no noun chunk at all.
+
+    ``a rusty car driving`` parses with ``driving`` as the root verb and
+    ``car`` as its compound child, so ``doc.noun_chunks`` is empty. Without
+    this fallback every object-bound attribute would lose its noun binding
+    -- and the calibration corpus (spec section 3.4) is full of that shape.
+    """
+    return " ".join(
+        t.text
+        for t in doc
+        if t.pos_ in ("NOUN", "PROPN") and _classify(t) is None and not t.is_stop
+    )
+
+
 def _head_noun_chunk(doc):
     """The first noun chunk that is not part of a lighting/scene phrase."""
     for chunk in doc.noun_chunks:
@@ -87,7 +102,7 @@ def _head_noun_chunk(doc):
         words = [t.text for t in chunk if not t.is_stop or t.pos_ == "NOUN"]
         stripped = [t.text for t in chunk if _classify(t) is None and not t.is_stop]
         return chunk, " ".join(stripped) if stripped else " ".join(words)
-    return None, ""
+    return None, _fallback_identity(doc)
 
 
 def parse_prompt(prompt: str, nlp=None) -> list[Component]:
