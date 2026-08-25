@@ -9,6 +9,16 @@ and tune routing before spending Kaggle GPU time.
     python scripts/explain.py "a very rusty car driving" --steps 8
     python scripts/explain.py "a slightly red car" --basm calibration_runs/basm.npz
 
+Add ``--save`` to persist the routing record (no image -- that needs a GPU)::
+
+    python scripts/explain.py "a very red car" --save outputs/
+
+In Docker the container filesystem is thrown away, so mount a volume or the
+saved files never reach the host::
+
+    docker run --rm -v "$(pwd)/outputs:/app/outputs" flair-test \\
+        python scripts/explain.py "a very red car" --save outputs/
+
 Embeddings are deterministic fakes -- real ones need the T5/CLIP encoders.
 That affects only the coherence-guard cosine check; every routing decision
 shown here is exactly what the real pipeline computes.
@@ -17,12 +27,15 @@ shown here is exactly what the real pipeline computes.
 from __future__ import annotations
 
 import argparse
+import re
 import zlib
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 import torch
 
+from flair_t2i.artifacts import RunRecord, describe_plan, save_run
 from flair_t2i.attributes import CORE_ATTRIBUTES, AttributeClass
 from flair_t2i.basm import BASM
 from flair_t2i.config import FlairConfig
@@ -64,6 +77,14 @@ def main() -> None:
     parser.add_argument("--basm", type=Path, help="a real calibrated basm.npz")
     parser.add_argument("--no-fuzzy", action="store_true")
     parser.add_argument("--alpha-0", type=float, default=None)
+    parser.add_argument(
+        "--save",
+        type=Path,
+        nargs="?",
+        const=Path("outputs"),
+        help="save the routing record (no image) to this directory",
+    )
+    parser.add_argument("--tag", default="explain", help="prefix for the run id")
     args = parser.parse_args()
 
     cfg = FlairConfig(device="cpu")
@@ -160,7 +181,33 @@ def main() -> None:
         )
     )
     print(f"\n   injection active for {active}/{args.steps} steps, "
-          f"then the base prompt runs alone.\n")
+          f"then the base prompt runs alone.")
+
+    # ---- 6. save --------------------------------------------------------
+    if args.save:
+        slug = re.sub(r"[^a-z0-9]+", "-", args.prompt.lower()).strip("-")[:40]
+        digest = zlib.crc32(
+            f"{args.prompt}{cfg.alpha_0}{args.no_fuzzy}{source}".encode()
+        )
+        record = RunRecord(
+            run_id=f"{args.tag}_{slug}_{digest:08x}",
+            prompt=args.prompt,
+            seed=-1,  # no sampling happened; routing is seed-independent
+            steps=args.steps,
+            guidance_scale=0.0,
+            routing=True,
+            fuzzy=not args.no_fuzzy,
+            basm_source=source,
+            config=asdict(cfg),
+            tag=args.tag,
+            notes="routing decisions only -- no image, CPU dry run",
+            **describe_plan(plan, guard),
+        )
+        path = save_run(args.save, record)
+        print(f"\n   saved {path}")
+        print("   (routing record only -- generating the image needs a GPU)")
+
+    print()
 
 
 if __name__ == "__main__":
