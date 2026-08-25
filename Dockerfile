@@ -1,14 +1,19 @@
-# Test environment for the FLAIR foundation suite (Tasks 1-10).
+# Local CPU environment for FLAIR (Tasks 1-10).
 #
-# Installs only what the CPU test suite needs -- torch is the CPU-only
-# wheel, and the diffusion stack (diffusers, transformers, lpips) is
-# deliberately absent because no test imports it. GPU work runs on Kaggle.
+# Runs everything that does NOT need a GPU: the full test suite, and
+# scripts/explain.py, which shows the routing decisions for any prompt.
+# The diffusion stack (diffusers, transformers, lpips) is deliberately
+# absent -- that work runs on Kaggle, see notebooks/flair_kaggle.ipynb.
 #
 #   docker build -t flair-test .
-#   docker run --rm flair-test
+#   docker run --rm flair-test                                  # 87 tests
+#   docker run --rm flair-test python scripts/explain.py "a very red car"
 FROM python:3.12-slim
 
 WORKDIR /app
+
+# So `python scripts/...` resolves the package, not just pytest.
+ENV PYTHONPATH=/app
 
 # CPU-only torch keeps the image to a fraction of the CUDA build's size.
 RUN pip install --no-cache-dir \
@@ -25,5 +30,6 @@ RUN pip install --no-cache-dir \
 COPY pyproject.toml ./
 COPY flair_t2i/ ./flair_t2i/
 COPY tests/ ./tests/
+COPY scripts/ ./scripts/
 
 CMD ["python", "-m", "pytest", "-v", "--tb=short"]

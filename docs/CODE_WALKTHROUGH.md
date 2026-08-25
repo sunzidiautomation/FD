@@ -4,6 +4,25 @@ How the code runs, in execution order, and how to get an image out of it.
 
 **Status:** Tasks 1-10 implemented, 87 tests passing. Tasks 11-16 (calibration) planned, not built.
 
+## What runs where
+
+| | Local (Docker, no GPU) | Kaggle (GPU) |
+|---|---|---|
+| Test suite (87) | ✅ | ✅ |
+| Parsing, fuzzy hedges, BASM lookup, routing plan, α schedule | ✅ `scripts/explain.py` | ✅ |
+| Text encoding (T5/CLIP), diffusion, images | ❌ | ✅ `scripts/smoke_test.py` |
+| BASM calibration | ❌ | ✅ (after Tasks 11-16) |
+
+Every *decision* FLAIR makes is CPU-only. The GPU is needed just to turn those decisions into pixels — so tune routing locally, then spend quota on generation.
+
+```bash
+docker build -t flair-test .
+docker run --rm flair-test                                   # 87 tests, ~3s
+docker run --rm flair-test python scripts/explain.py "a very red car"
+```
+
+Kaggle: **`notebooks/flair_kaggle.ipynb`**.
+
 ---
 
 ## Part 1 — The files, in the order they run

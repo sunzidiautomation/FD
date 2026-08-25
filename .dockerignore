@@ -1,6 +1,6 @@
 .git/
 docs/
-scripts/
+notebooks/
 outputs/
 calibration_runs/
 __pycache__/
