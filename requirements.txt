@@ -1,0 +1,13 @@
+diffusers==0.39.0
+transformers>=4.44.0
+accelerate
+safetensors
+sentencepiece
+protobuf
+scikit-fuzzy
+spacy
+lpips
+scipy
+scikit-image
+numpy
+pytest

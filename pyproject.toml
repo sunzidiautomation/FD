@@ -1,0 +1,11 @@
+[project]
+name = "flair-t2i"
+version = "0.1.0"
+description = "FLAIR: block-routed attribute control for MM-DiT text-to-image generation"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["flair_t2i*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
