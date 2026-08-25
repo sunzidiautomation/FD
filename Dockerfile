@@ -1,4 +1,4 @@
-# Local CPU environment for FLAIR (Tasks 1-10).
+# Local CPU environment for FLAIR (Tasks 1-16b).
 #
 # Runs everything that does NOT need a GPU: the full test suite, and
 # scripts/explain.py, which shows the routing decisions for any prompt.
@@ -6,7 +6,7 @@
 # absent -- that work runs on Kaggle, see notebooks/flair_kaggle.ipynb.
 #
 #   docker build -t flair-test .
-#   docker run --rm flair-test                                  # 87 tests
+#   docker run --rm flair-test                                  # 175 tests
 #   docker run --rm flair-test python scripts/explain.py "a very red car"
 FROM python:3.12-slim
 

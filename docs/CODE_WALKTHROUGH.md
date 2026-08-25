@@ -2,22 +2,24 @@
 
 How the code runs, in execution order, and how to get an image out of it.
 
-**Status:** Tasks 1-10 implemented, 87 tests passing. Tasks 11-16 (calibration) planned, not built.
+**Status:** Tasks 1-16b implemented, 175 tests passing. Tasks 17-22 (evaluation, ablations) planned, not built.
 
 ## What runs where
 
 | | Local (Docker, no GPU) | Kaggle (GPU) |
 |---|---|---|
-| Test suite (87) | ✅ | ✅ |
+| Test suite (175) | ✅ | ✅ |
 | Parsing, fuzzy hedges, BASM lookup, routing plan, α schedule | ✅ `scripts/explain.py` | ✅ |
+| Delta metrics and harness logic, against stubs | ✅ | ✅ |
 | Text encoding (T5/CLIP), diffusion, images | ❌ | ✅ `scripts/smoke_test.py` |
-| BASM calibration | ❌ | ✅ (after Tasks 11-16) |
+| Vital-layer prefilter, BASM calibration | ❌ | ✅ `scripts/calibrate.py` |
+| diffusers API assumptions | ❌ | ✅ `scripts/verify_api.py` |
 
 Every *decision* FLAIR makes is CPU-only. The GPU is needed just to turn those decisions into pixels — so tune routing locally, then spend quota on generation.
 
 ```bash
 docker build -t flair-test .
-docker run --rm flair-test                                   # 87 tests, ~3s
+docker run --rm flair-test                                   # 175 tests, ~4s
 docker run --rm flair-test python scripts/explain.py "a very red car"
 ```
 
@@ -26,6 +28,12 @@ Kaggle: **`notebooks/flair_kaggle.ipynb`**.
 ---
 
 ## Part 1 — The files, in the order they run
+
+There are two execution paths. **Calibration (1b) runs offline, once, and
+produces the `basm.npz` that generation (1a) then reads.** Nothing in 1b runs
+while you are making pictures.
+
+### 1a — The generation path
 
 | # | File | Responsibility | Runs when |
 |---|---|---|---|
@@ -46,6 +54,44 @@ Kaggle: **`notebooks/flair_kaggle.ipynb`**.
 | 15 | `flair_t2i/schedule.py` | `timestep_scale()` — early strong, late weak | **per block per step** |
 
 Rows 10, 13, 14 run in the hot loop: `steps × blocks` times per image (20 steps × 24 blocks ≈ 480 calls).
+
+### 1b — The calibration path (offline, produces the BASM)
+
+| # | File | Responsibility | Runs when |
+|---|---|---|---|
+| 16 | `flair_t2i/calibration/corpus.py` | `ContrastivePair`, `load_corpus()`, `validate_corpus()` — enforces one-word-difference pairs | campaign start |
+| 17 | `flair_t2i/calibration/prefilter.py` | `run_prefilter()` — bypass each block, rank by image change; `.elbow()` picks how many to keep | **phase 1** of campaign |
+| 18 | `flair_t2i/metrics/masking.py` | `ClipSegMasker` — object mask, so a metric measures the object and not the background | per pair |
+| 19 | `flair_t2i/metrics/registry.py` | `delta_for(attr)` → the right metric for this attribute | per pair |
+| 20 | `flair_t2i/metrics/photometric.py` | size / warmth / lighting / colour deltas (ΔE, area ratio) | per pair |
+| 21 | `flair_t2i/metrics/embedding.py` | `ClipScorer`; identity / style / action deltas | per pair |
+| 22 | `flair_t2i/metrics/texture.py` | `gram_texture_delta()` — Gram-matrix texture change | per pair |
+| 23 | `flair_t2i/calibration/harness.py` | `calibrate()` — the sweep, checkpointed per cell; min-max normalises each column | **phase 2** of campaign |
+
+Output: `calibration_runs/basm.npz`, loaded by row 4 on the generation path.
+
+**Two metric families, easily confused:**
+
+| | Delta metrics | Absolute metrics |
+|---|---|---|
+| Question | *did this attribute change?* | *is this attribute correct?* |
+| Compares | baseline image vs. swapped image | one image vs. the prompt |
+| Used by | calibration (1b), to fill the BASM | the coherence guard, and Week 6 evaluation |
+| Where | `metrics/registry.py` → `DELTA_METRICS` | Tasks 17-19, **not built yet** |
+
+Only the delta family exists today. Building the absolute family against the
+delta one — assuming a metric can serve both — would silently corrupt
+evaluation, because the two answer different questions.
+
+### 1c — The scripts
+
+| Script | Does | Needs GPU |
+|---|---|---|
+| `scripts/verify_env.py` | imports every dependency, reports what is missing | no |
+| `scripts/verify_api.py` | checks 12 assumptions about diffusers' internals | **yes** |
+| `scripts/explain.py` | prompt → parsed components + routing plan, no image | no |
+| `scripts/smoke_test.py` | the 5 images, `N_BLOCKS`, `T_GEN` | **yes** |
+| `scripts/calibrate.py` | `prefilter` then `basm` — the campaign | **yes** |
 
 ---
 
@@ -249,7 +295,7 @@ That is expected at this stage. The smoke test proves the *plumbing* works, not 
 | Stage | What you get | Blocked on |
 |---|---|---|
 | **Now** | Plumbing images, all routed to block 0 | — |
-| **After Week 3-4** | Real BASM → each attribute to *its own* block; routing becomes meaningful | calibration campaign (Tasks 11-16) |
+| **After Week 3-4** | Real BASM → each attribute to *its own* block; routing becomes meaningful | *running* the campaign — `RUNBOOK.md` phases 5-6 |
 | **After Week 5** | Good images — α₀ and timestep window tuned | qualitative tuning |
 | **After Week 7** | Numbers vs. baselines; the go/no-go answer | eval pipeline (Tasks 17-19) |
 
@@ -261,15 +307,28 @@ That is expected at this stage. The smoke test proves the *plumbing* works, not 
 
 ```bash
 docker build -t flair-test .
-docker run --rm flair-test          # 87 passed
+./run-local.sh test                 # 175 passed, ~4s
 ```
 
-The image installs only what the suite needs: CPU torch, numpy, scipy, scikit-fuzzy, spaCy. No GPU, no model download, ~3 seconds to run.
+The image installs only what the suite needs: CPU torch, numpy, scipy, scikit-fuzzy, scikit-image, spaCy. No GPU, no model download.
 
-**Not covered by any test** — these need real SD3.5 weights and surface on the first Kaggle run:
+Use `run-local.sh` rather than a bare `docker run`: under Git Bash, MSYS
+rewrites container paths like `/app` into Windows paths, and the script sets
+`MSYS_NO_PATHCONV=1` to stop it.
+
+The suite reaches the calibration code by dependency injection — `Masker`,
+`ImageTextScorer`, and the generate functions are all parameters, so tests
+substitute stubs and exercise the real sweep, normalisation, and checkpoint
+logic on CPU in milliseconds.
+
+**Still not covered by the local suite** — these need real SD3.5 weights:
 
 - `patching.bypass_blocks` return signature vs. diffusers' real `JointTransformerBlock.forward`
 - `pipeline.encode_prompt(...)` 4-tuple shape and `prompt_2`/`prompt_3` kwargs
+
+Both are now checked by **`scripts/verify_api.py`**, which runs on Kaggle
+before anything expensive. It does not run locally — the Docker image has no
+`diffusers`.
 
 ---
 
@@ -277,7 +336,11 @@ The image installs only what the suite needs: CPU torch, numpy, scipy, scikit-fu
 
 | Tasks | What | Plan |
 |---|---|---|
-| 11-16 | Metrics, corpus, prefilter, BASM harness | `plans/…-calibration-harness.md` |
-| 16b | Checkpointing in `calibrate()` — **do before any long run** | roadmap §2.4 |
 | 17-19 | Absolute metrics, eval prompt set, baselines | named in roadmap, expand at Week 6 |
 | 20-22 | Ablations; FLUX and fuzzy-conflict (both gated on Week 7) | roadmap §3.3 |
+
+Tasks 11-16b (metrics, corpus, prefilter, BASM harness, checkpointing) are
+**built and tested** — see Part 1b. What has *not* happened is running them:
+no GPU campaign has been executed, so `calibration_runs/` does not exist and
+every image the code can currently produce routes to block 0. See
+`RUNBOOK.md`.
