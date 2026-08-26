@@ -20,7 +20,7 @@ docker build -t flair-test .
 ```
 Expect `175 passed`. `./run-local.sh` also has `explain`, `summary`, and `shell` subcommands (see the script). Windows/Git-Bash rewrites `/app` to a Windows-style path unless `MSYS_NO_PATHCONV=1` is set — `run-local.sh` already sets this; don't strip it if editing that script.
 
-No linter or formatter is configured (no ruff/black/eslint/etc.) — don't assume one when reviewing style.
+Ruff is configured in `pyproject.toml` (line-length 100, target py310, `notebooks/` excluded, `E402` ignored under `tests/` because they call `pytest.importorskip("torch")` before importing torch-dependent modules). A `PostToolUse` hook in `.claude/settings.json` runs `ruff check` on every `.py` file after a Write or Edit, so lint feedback arrives inline. No formatter is configured — don't reformat existing code.
 
 ## Git
 

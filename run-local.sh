@@ -15,10 +15,11 @@ IMAGE=flair-test
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$HERE/outputs"
 
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "building $IMAGE ..."
-    docker build -q -t "$IMAGE" "$HERE" >/dev/null
-fi
+# Always rebuild. The Dockerfile COPYs the source in, so a cached image
+# silently tests whatever the code looked like when it was last built --
+# a green run against stale code is worse than no run. Layer caching makes
+# this about a second when nothing has changed.
+docker build -q -t "$IMAGE" "$HERE" >/dev/null
 
 # MSYS/Git-Bash rewrites /app to a Windows path without the leading slash.
 run() { MSYS_NO_PATHCONV=1 docker run --rm -v "$HERE/outputs:/app/outputs" "$@"; }

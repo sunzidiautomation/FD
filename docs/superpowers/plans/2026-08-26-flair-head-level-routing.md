@@ -16,7 +16,9 @@
 - **Tests run in Docker only.** `docker build -t flair-test . && ./run-local.sh test`. There is no local Python environment for this repo. Do not strip `MSYS_NO_PATHCONV=1` from `run-local.sh`.
 - **Baseline: 175 tests passing.** Every task must leave the suite green. Report the new count at each commit.
 - **No test may require a GPU or download SD3.5.** Tests that would need the real transformer use stubs.
-- **No linter or formatter is configured.** Do not add one; match surrounding style.
+- **Ruff IS configured** in `pyproject.toml` — line-length 100, target py310, `E402` ignored under `tests/`. A `PostToolUse` hook runs `ruff check` on every `.py` write, so lint errors surface inline. Keep imports used: an unused `import pytest` in a test file is an `F401` failure. No formatter is configured — do not reformat existing code. (CLAUDE.md claimed no linter existed; that was stale and has been corrected.)
+- **`tests/` is a package** — `tests/__init__.py` exists, so test modules may use relative imports such as `from .reference_blend import reference_blend`. Without it, pytest's default `prepend` import mode fails with `attempted relative import with no known parent package`.
+- **`./run-local.sh test` always rebuilds the image.** The Dockerfile `COPY`s the source, so a cached image would test stale code. Do not add a build-skip back.
 - **`docs/`, `notebooks/`, `calibration_runs/` are gitignored.** New files under them need `git add -f`.
 - **The two load-bearing correctness conditions** (spec §3.3), which Task 5 and Task 6 must both honour:
   1. The residual is projected **weight-only, with no bias term**.
@@ -3012,13 +3014,23 @@ Task 10        full campaign script + docs            ~20,195 generations
 
 Task 10 is written last deliberately. There is no reason to build the full-campaign driver, or to spend five-pair compute, before the supervisor has agreed the direction is right. The demo de-risks roughly 15 A100-hours behind a 3-hour check.
 
+## Two risks the CPU suite structurally cannot catch
+
+Both come from `install_head_routing` doing `setattr(attn, name, wrapper)` where the wrapper is itself an `nn.Module`. On CPU stubs this is invisible; on a real offloaded SD3.5-M it may not be. Check both during the Kaggle verification below, before the demo sweep.
+
+**1. The module tree changes shape while patched.** Assigning an `nn.Module` to an `nn.Module` attribute *registers* it, so the original `Linear` becomes a child of the wrapper and `state_dict()` keys shift from `add_q_proj.weight` to `add_q_proj.inner.weight`. Harmless as long as nothing saves or reloads weights while FLAIR is installed — and `pipeline.generate` uninstalls in a `finally`, so the window is narrow. Do not save a checkpoint from inside a routed generation.
+
+**2. `enable_model_cpu_offload()` may not see the wrapper.** accelerate installs offload hooks by walking the module tree at offload time. FLAIR wraps *after* that, so the hook stays on `inner` while calls now arrive at the wrapper. The expected behaviour is fine — `wrapper.forward` → `inner.forward` → hook fires as before — but this is an interaction between two libraries' patching, not something the stub tests exercise. Confirm empirically with step 3 below: if routed generation produces noise, produces a device-mismatch error, or is dramatically slower than baseline, suspect this first.
+
+If either bites, the fallback is to wrap the *function* rather than the module — keep `attn.add_q_proj` as the original `Linear` and instead patch `attn.add_q_proj.forward` with a closure, which leaves the module tree untouched. That change is confined to `patching.py` and needs no change to `head_proj.py`'s residual maths.
+
 ## Post-plan verification
 
 Before the demo sweep, on Kaggle:
 
 1. `python scripts/verify_api.py` — all 19 checks pass
 2. `python -m pytest -q` — full suite green
-3. `python scripts/smoke_test.py --steps 20 --out outputs/` — images generate, `units touched` lists head units
+3. `python scripts/smoke_test.py --steps 20 --out outputs/` — images generate, `units touched` lists head units, **and the routed image is neither noise nor visibly slower than the baseline** (see the two risks above)
 4. Record `N_BLOCKS`, `N_HEADS`, and `T_GEN` in `calibration_runs/measurements.txt`
 
 Then `python scripts/demo.py --out flair_head_demo --steps 12`, zip the output, and hand it over. Recompute the full-campaign budget as `A × P × S × (1 + N_BLOCKS × N_HEADS)` only after that review.

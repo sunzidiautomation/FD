@@ -1,4 +1,3 @@
-import pytest
 from PIL import Image
 
 from flair_t2i.latents import LatentRecorder
