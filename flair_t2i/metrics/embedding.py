@@ -52,8 +52,21 @@ class ClipScorer:
 
         inputs = self.processor(images=[image], return_tensors="pt").to(self.device)
         with torch.no_grad():
-            features = self.model.get_image_features(**inputs)[0]
-        features = features / features.norm()
+            output = self.model.get_image_features(**inputs)
+
+        if hasattr(output, "image_embeds") and output.image_embeds is not None:
+            features = output.image_embeds
+        elif hasattr(output, "pooler_output") and output.pooler_output is not None:
+            features = output.pooler_output
+        elif isinstance(output, torch.Tensor):
+            features = output
+        else:
+            features = output[0]
+
+        features = features.squeeze()
+        norm = features.norm()
+        if norm > 0:
+            features = features / norm
         return features.float().cpu().numpy()
 
     def image_text_similarity(
@@ -66,12 +79,30 @@ class ClipScorer:
         ).to(self.device)
         with torch.no_grad():
             output = self.model(**inputs)
-        image_features = output.image_embeds / output.image_embeds.norm(
-            dim=-1, keepdim=True
-        )
-        text_features = output.text_embeds / output.text_embeds.norm(
-            dim=-1, keepdim=True
-        )
+
+        image_embeds = getattr(output, "image_embeds", None)
+        text_embeds = getattr(output, "text_embeds", None)
+        if image_embeds is None:
+            image_embeds = output[0] if isinstance(output, (tuple, list)) else output
+        if text_embeds is None:
+            text_embeds = (
+                output[1]
+                if isinstance(output, (tuple, list)) and len(output) > 1
+                else output
+            )
+
+        if image_embeds.dim() == 1:
+            image_embeds = image_embeds.unsqueeze(0)
+        elif image_embeds.dim() > 2:
+            image_embeds = image_embeds.view(image_embeds.shape[0], -1)
+
+        if text_embeds.dim() == 1:
+            text_embeds = text_embeds.unsqueeze(0)
+        elif text_embeds.dim() > 2:
+            text_embeds = text_embeds.view(text_embeds.shape[0], -1)
+
+        image_features = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
+        text_features = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
         return (image_features @ text_features.T)[0].float().cpu().numpy()
 
 
@@ -81,10 +112,12 @@ def clip_norm(similarity: float) -> float:
 
 
 def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    a_flat = np.asarray(a, dtype=np.float64).ravel()
+    b_flat = np.asarray(b, dtype=np.float64).ravel()
+    denom = np.linalg.norm(a_flat) * np.linalg.norm(b_flat)
     if denom == 0.0:
         return 0.0
-    cosine = float(np.dot(a, b) / denom)
+    cosine = float(np.dot(a_flat, b_flat) / denom)
     return float(np.clip((1.0 - cosine) / 2.0, 0.0, 1.0))
 
 
