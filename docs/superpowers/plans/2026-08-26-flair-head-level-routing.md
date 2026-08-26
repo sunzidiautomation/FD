@@ -1632,10 +1632,25 @@ from flair_t2i.processor import PlanRef
 
 - [ ] **Step 5: Run the suite**
 
-`tests/test_pipeline.py` and `tests/test_harness.py` will now fail on the missing `install_flair` — Tasks 8 and 9 fix them. Confirm failures are confined to those two files:
+⚠️ **Removing `install_flair` stops the suite from running at all.** `pipeline.py` imports it at *module scope*, so pytest aborts during collection and reports nothing:
 
-Run: `./run-local.sh test`
-Expected: `tests/test_patching.py` and `tests/test_processor.py` green; failures confined to `test_pipeline.py` and `test_harness.py`
+```
+ERROR tests/test_pipeline.py
+E   ImportError: cannot import name 'install_flair' from 'flair_t2i.patching'
+!!!! Interrupted: 1 error during collection !!!!
+```
+
+To see the real state, add a reporting-only flag (do not commit it):
+
+```
+MSYS_NO_PATHCONV=1 docker run --rm flair-test python -m pytest -q --continue-on-collection-errors
+```
+
+Expected: **214 passed, 3 failed, 1 error** — `tests/test_patching.py` (6) and `tests/test_processor.py` (4) green; the 3 failures in `tests/test_artifacts.py`; the error being `tests/test_pipeline.py` failing to import. All four belong to Task 8, which restores a runnable suite.
+
+`tests/test_harness.py` stays **green** throughout: `harness.py` imports `install_flair` inside a function, not at module scope, so it never trips collection and its stubbed tests never reach that line. Task 9 still converts it.
+
+Also note Step 4 leaves `import torch` orphaned in `processor.py` once `FlairJointProcessor` is gone — only its annotations used it. Remove it, or ruff fails with `F401`.
 
 - [ ] **Step 6: Commit**
 
