@@ -48,12 +48,16 @@ Insert this block into `scripts/verify_api.py` immediately after the existing `b
     proc_src = "".join(inspect.getsource(JointAttnProcessor2_0.__call__).split())
 
     # The entire head-masking premise: head h must own the contiguous
-    # output range [h*head_dim, (h+1)*head_dim). If this reshape changes,
-    # masking dimension ranges is no longer masking heads.
+    # output range [h*head_dim, (h+1)*head_dim). What matters is the SHAPE
+    # of the reshape -- heads in axis 2, then transposed to axis 1 -- not
+    # what diffusers happens to name its locals, so this matches structure
+    # and tolerates a rename of batch_size or head_dim.
     check(
         "head reshape gives each head a contiguous dim slice",
-        "view(batch_size,-1,attn.heads,head_dim).transpose(1,2)" in proc_src,
-        "reshape convention changed -- the head-masking premise is INVALID",
+        re.search(r"\.view\([^)]+,-1,attn\.heads,[^)]+\)\.transpose\(1,2\)", proc_src)
+        is not None,
+        "reshape SHAPE changed -- read the diffusers source before concluding "
+        "the head-masking premise is dead; a rename alone does not break it",
     )
 
     # patching.install_head_routing wraps exactly these three modules.
@@ -99,7 +103,7 @@ Two of the existing checks — `Attention.get_processor` / `set_processor` — b
 | Result | Action |
 |---|---|
 | All pass | Proceed to Task 2. |
-| "head reshape gives each head a contiguous dim slice" FAILS | **Stop the whole plan.** Return to the spec — the masking premise is invalid and §3.1 needs rework. |
+| "head reshape gives each head a contiguous dim slice" FAILS | **Stop and read the diffusers source first.** The check matches structure, not identifier names, so a failure should mean a real convention change — but confirm by eye before concluding. If heads genuinely no longer occupy a contiguous output range, the masking premise is invalid and spec §3.1 needs rework. |
 | "no unhandled second attention (attn2)" FAILS | Proceed, but add `attn2` to the module list in Task 7 Step 3 and record the deviation in the commit message. |
 | Any other FAIL | Fix the named assumption in the code it points at before continuing. |
 

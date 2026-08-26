@@ -14,6 +14,7 @@ a GPU.
 """
 
 import inspect
+import re
 import sys
 
 CHECKS: list[tuple[str, str]] = []
@@ -109,12 +110,16 @@ def main() -> int:
     proc_src = "".join(inspect.getsource(JointAttnProcessor2_0.__call__).split())
 
     # The entire head-masking premise: head h must own the contiguous
-    # output range [h*head_dim, (h+1)*head_dim). If this reshape changes,
-    # masking dimension ranges is no longer masking heads.
+    # output range [h*head_dim, (h+1)*head_dim). What matters is the SHAPE
+    # of the reshape -- heads in axis 2, then transposed to axis 1 -- not
+    # what diffusers happens to name its locals, so this matches structure
+    # and tolerates a rename of batch_size or head_dim.
     check(
         "head reshape gives each head a contiguous dim slice",
-        "view(batch_size,-1,attn.heads,head_dim).transpose(1,2)" in proc_src,
-        "reshape convention changed -- the head-masking premise is INVALID",
+        re.search(r"\.view\([^)]+,-1,attn\.heads,[^)]+\)\.transpose\(1,2\)", proc_src)
+        is not None,
+        "reshape SHAPE changed -- read the diffusers source before concluding "
+        "the head-masking premise is dead; a rename alone does not break it",
     )
 
     # patching.install_head_routing wraps exactly these three modules.
