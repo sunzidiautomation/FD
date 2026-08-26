@@ -50,8 +50,11 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     cfg = FlairConfig(device="cuda")
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     pipe = StableDiffusion3Pipeline.from_pretrained(
-        cfg.model_id, torch_dtype=torch.float16
+        cfg.model_id,
+        torch_dtype=torch.float16,
+        token=token,
     )
     pipe.enable_model_cpu_offload()
 
