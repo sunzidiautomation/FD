@@ -94,6 +94,9 @@ def main() -> None:
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
+    # Set CUDA memory allocator configuration to prevent fragmentation OOM
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     cfg = FlairConfig(device="cuda")
     fp = _pipeline(cfg)
 
@@ -139,9 +142,9 @@ def main() -> None:
         corpus=corpus,
         block_ids=block_ids,
         head_ids=head_ids,
-        masker=ClipSegMasker(device=cfg.device),
+        masker=ClipSegMasker(device="cpu"),
         seeds=args.seeds,
-        scorer=ClipScorer(device=cfg.device),
+        scorer=ClipScorer(device="cpu"),
         checkpoint_dir=args.out,
         progress=lambda attr, unit, value: print(
             f"  {attr.value:<9} B{unit.block:<3}H{unit.head:<3} raw={value:.4f}"

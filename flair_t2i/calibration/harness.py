@@ -230,6 +230,7 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
         max_sequence_length=flair_pipeline.cfg.max_sequence_length,
     )
 
+    @torch.inference_mode()
     def generate(prompt: str, seed: int, swap: SwapSpec | None) -> Image.Image:
         if swap is None:
             return flair_pipeline.generate(
@@ -268,9 +269,9 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
             )
         finally:
             uninstall_head_routing(handles)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         return result.images[0]
-
-    return generate
 
     return generate

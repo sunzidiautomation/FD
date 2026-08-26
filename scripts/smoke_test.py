@@ -50,6 +50,9 @@ def main() -> None:
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
+    # Set CUDA memory allocator configuration to prevent fragmentation OOM
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     # Load .env if present
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():

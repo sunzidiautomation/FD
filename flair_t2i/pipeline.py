@@ -38,6 +38,7 @@ class FlairPipeline:
         self.last_plan: RoutingPlan | None = None
         self.last_guard: CoherenceGuard | None = None
 
+    @torch.inference_mode()
     def encode_components(self, components: list[Component]) -> dict[str, torch.Tensor]:
         """Encode every component's text once, batched."""
         if not components:
@@ -51,8 +52,11 @@ class FlairPipeline:
             do_classifier_free_guidance=False,
             max_sequence_length=self.cfg.max_sequence_length,
         )
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return {c.id: prompt_embeds[i] for i, c in enumerate(components)}
 
+    @torch.inference_mode()
     def generate(
         self,
         prompt: str,
@@ -111,5 +115,7 @@ class FlairPipeline:
             )
         finally:
             uninstall_head_routing(handles)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         return result.images[0]
