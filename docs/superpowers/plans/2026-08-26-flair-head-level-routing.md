@@ -2242,13 +2242,761 @@ both hasm.npz and the derived basm.npz."
 
 ---
 
+### Task 11: Intermediate latent capture
+
+The demo's most legible evidence is watching a routed attribute emerge across denoising. FLAIR has no way to see intermediate latents today.
+
+**Files:**
+- Create: `flair_t2i/latents.py`
+- Modify: `flair_t2i/pipeline.py` (`generate` gains a `recorder` parameter)
+- Test: `tests/test_latents.py`
+
+**Interfaces:**
+- Consumes: nothing from Tasks 2-10.
+- Produces:
+  - `LatentRecorder(decode_fn, at=(0.0, 0.25, 0.5, 0.75))` — `decode_fn: Callable[[Any], Image.Image]` is injected so tests never need a VAE
+  - `.target_steps(total_steps) -> set[int]`
+  - `.__call__(step_index, total_steps, latents) -> None`
+  - `.frames: list[tuple[float, Image.Image]]`
+  - `FlairPipeline.generate(..., recorder: LatentRecorder | None = None)`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_latents.py`:
+
+```python
+import pytest
+from PIL import Image
+
+from flair_t2i.latents import LatentRecorder
+
+
+def _decode(latents):
+    return Image.new("RGB", (8, 8), (int(latents), 0, 0))
+
+
+def test_target_steps_map_fractions_onto_step_indices():
+    recorder = LatentRecorder(_decode, at=(0.0, 0.5))
+    assert recorder.target_steps(20) == {0, 10}
+
+
+def test_target_steps_never_exceed_the_last_index():
+    recorder = LatentRecorder(_decode, at=(1.0,))
+    assert recorder.target_steps(10) == {9}
+
+
+def test_records_only_at_target_steps():
+    recorder = LatentRecorder(_decode, at=(0.0, 0.5))
+    for step in range(20):
+        recorder(step, 20, step)
+
+    assert [frac for frac, _ in recorder.frames] == [0.0, 0.5]
+
+
+def test_frames_carry_the_decoded_image():
+    recorder = LatentRecorder(_decode, at=(0.0,))
+    recorder(0, 4, 42)
+
+    assert recorder.frames[0][1].getpixel((0, 0)) == (42, 0, 0)
+
+
+def test_zero_total_steps_records_nothing():
+    recorder = LatentRecorder(_decode, at=(0.0,))
+    recorder(0, 0, 1)
+    assert recorder.frames == []
+
+
+def test_reset_clears_frames_between_generations():
+    recorder = LatentRecorder(_decode, at=(0.0,))
+    recorder(0, 4, 1)
+    recorder.reset()
+    assert recorder.frames == []
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `./run-local.sh test`
+Expected: FAIL — `ModuleNotFoundError: No module named 'flair_t2i.latents'`
+
+- [ ] **Step 3: Write the recorder**
+
+Create `flair_t2i/latents.py`:
+
+```python
+"""Capture intermediate latents during denoising.
+
+Routing's effect is easiest to read as a sequence: the attribute appears
+early, while ``timestep_scale`` still has weight, and the rest of the run
+refines what is already there. Decoding is injected rather than imported
+so nothing here needs a VAE -- the tests pass a stub.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+from PIL import Image
+
+
+@dataclass
+class LatentRecorder:
+    decode_fn: Callable[[Any], Image.Image]
+    at: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75)
+    frames: list[tuple[float, Image.Image]] = field(default_factory=list)
+
+    def target_steps(self, total_steps: int) -> set[int]:
+        """The step indices closest to each requested fraction."""
+        if total_steps <= 0:
+            return set()
+        return {
+            min(total_steps - 1, int(round(frac * total_steps))) for frac in self.at
+        }
+
+    def reset(self) -> None:
+        self.frames = []
+
+    def __call__(self, step_index: int, total_steps: int, latents: Any) -> None:
+        if step_index not in self.target_steps(total_steps):
+            return
+        frac = step_index / total_steps if total_steps else 0.0
+        self.frames.append((frac, self.decode_fn(latents)))
+```
+
+- [ ] **Step 4: Wire it into the pipeline**
+
+In `flair_t2i/pipeline.py`, add the import:
+
+```python
+from .latents import LatentRecorder
+```
+
+Add the parameter to `generate`'s signature, after `fuzzy: bool = True`:
+
+```python
+        recorder: LatentRecorder | None = None,
+```
+
+and replace the `on_step` callback body:
+
+```python
+            def on_step(pipe, step_index, timestep, callback_kwargs):
+                ref.step = step_index
+                if recorder is not None and "latents" in callback_kwargs:
+                    recorder(step_index, steps, callback_kwargs["latents"])
+                return callback_kwargs
+```
+
+- [ ] **Step 5: Run it to verify it passes**
+
+Run: `./run-local.sh test`
+Expected: PASS — 6 new tests, full suite green
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add flair_t2i/latents.py flair_t2i/pipeline.py tests/test_latents.py
+git commit -m "feat: capture intermediate latents at chosen step fractions"
+```
+
+---
+
+### Task 12: The demo sweep
+
+Runs all 7 attributes over every head unit at **one contrastive pair each**, keeping every image. This is the deliverable the supervisor sees, and it is one fifth the cost of the full campaign (`7 × 1 × (1 + 576) = 4,039` generations, versus 20,195 at five pairs).
+
+**Files:**
+- Modify: `flair_t2i/calibration/harness.py` (add the `on_pair` hook)
+- Create: `flair_t2i/demo/__init__.py`
+- Create: `flair_t2i/demo/sweep.py`
+- Test: `tests/test_demo_sweep.py`
+
+**Interfaces:**
+- Consumes: `calibrate` (Task 9), `HeadUnit` (Task 2), `HASM` (Task 3), `LatentRecorder` (Task 11).
+- Produces:
+  - `calibrate(..., on_pair: PairFn | None = None)` where `PairFn = Callable[[AttributeClass, HeadUnit, ContrastivePair, int, Image.Image, Image.Image], None]`
+  - `DemoPaths(root)` with `.heads`, `.blocks`, `.latents`, `.baselines` directories and `.head_image(attr, unit) -> Path`, `.block_image(attr, block) -> Path`
+  - `run_demo_sweep(generate_fn, corpus, block_ids, head_ids, masker, paths, seeds, scorer=None, progress=None) -> HASM`
+
+- [ ] **Step 1: Add the image hook to the harness**
+
+In `flair_t2i/calibration/harness.py`, add the type alias next to `ProgressFn`:
+
+```python
+PairFn = Callable[
+    [AttributeClass, HeadUnit, ContrastivePair, int, Image.Image, Image.Image], None
+]
+```
+
+Add an `on_pair: PairFn | None = None` parameter to **both** `_measure_cell` and `calibrate` (last parameter in each), thread it through the `calibrate` → `_measure_cell` call, and inside `_measure_cell`'s seed loop, immediately after `swapped = generate_fn(...)`:
+
+```python
+            if on_pair is not None:
+                on_pair(attr, unit, pair, seed, baseline, swapped)
+```
+
+**Note the interaction with checkpointing:** a cell restored from `cells/` never regenerates, so `on_pair` never fires for it. The demo therefore runs against a **fresh** `checkpoint_dir` (or none), which Step 3's docstring states.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `tests/test_demo_sweep.py`:
+
+```python
+import numpy as np
+import pytest
+from PIL import Image
+
+from flair_t2i.attributes import AttributeClass
+from flair_t2i.calibration.corpus import ContrastivePair
+from flair_t2i.calibration.harness import SwapSpec
+from flair_t2i.demo.sweep import DemoPaths, run_demo_sweep
+from flair_t2i.heads import HeadUnit
+from flair_t2i.metrics.masking import RectMasker
+
+BLOCK_IDS = (0, 1)
+HEAD_IDS = (0, 1)
+LIVE_UNIT = HeadUnit(block=1, head=1)
+FULL_MASKER = RectMasker((0.0, 0.0, 1.0, 1.0))
+
+
+def _corpus():
+    return {
+        AttributeClass.COLOR: [
+            ContrastivePair("a red car on a road", "a blue car on a road", "car", None)
+        ]
+    }
+
+
+def _generate(prompt: str, seed: int, swap: SwapSpec | None) -> Image.Image:
+    if swap is not None and swap.unit == LIVE_UNIT and "blue" in swap.prompt:
+        return Image.new("RGB", (16, 16), (30, 30, 220))
+    return Image.new("RGB", (16, 16), (220, 30, 30))
+
+
+def _sweep(tmp_path):
+    return run_demo_sweep(
+        generate_fn=_generate,
+        corpus=_corpus(),
+        block_ids=BLOCK_IDS,
+        head_ids=HEAD_IDS,
+        masker=FULL_MASKER,
+        paths=DemoPaths(tmp_path),
+        seeds=[0],
+    )
+
+
+def test_writes_one_image_per_head_unit(tmp_path):
+    _sweep(tmp_path)
+    written = sorted(p.name for p in (tmp_path / "heads").glob("*.png"))
+    assert written == [
+        "color_b0_h0.png",
+        "color_b0_h1.png",
+        "color_b1_h0.png",
+        "color_b1_h1.png",
+    ]
+
+
+def test_writes_one_image_per_block(tmp_path):
+    _sweep(tmp_path)
+    written = sorted(p.name for p in (tmp_path / "blocks").glob("*.png"))
+    assert written == ["color_b0.png", "color_b1.png"]
+
+
+def test_writes_a_baseline_per_attribute(tmp_path):
+    _sweep(tmp_path)
+    assert (tmp_path / "baselines" / "color.png").exists()
+
+
+def test_returns_a_hasm_scoring_the_live_unit_highest(tmp_path):
+    hasm = _sweep(tmp_path)
+    assert hasm.top_k(AttributeClass.COLOR, 1) == [(LIVE_UNIT, pytest.approx(1.0))]
+
+
+def test_scores_are_saved_alongside_the_images(tmp_path):
+    _sweep(tmp_path)
+    assert (tmp_path / "hasm.npz").exists()
+
+
+def test_paths_are_created_on_construction(tmp_path):
+    paths = DemoPaths(tmp_path / "bundle")
+    for directory in (paths.heads, paths.blocks, paths.latents, paths.baselines):
+        assert directory.is_dir()
+
+
+def test_head_image_path_is_stable(tmp_path):
+    paths = DemoPaths(tmp_path)
+    got = paths.head_image(AttributeClass.COLOR, HeadUnit(3, 7))
+    assert got == tmp_path / "heads" / "color_b3_h7.png"
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `./run-local.sh test`
+Expected: FAIL — `ModuleNotFoundError: No module named 'flair_t2i.demo'`
+
+- [ ] **Step 4: Write the sweep**
+
+Create `flair_t2i/demo/__init__.py`:
+
+```python
+"""Demonstration bundle: a runnable, self-contained view of what routing does."""
+```
+
+Create `flair_t2i/demo/sweep.py`:
+
+```python
+"""The demonstration sweep.
+
+Every attribute over every head unit at ONE contrastive pair each -- one
+fifth the full campaign's cost, and enough to show which block and which
+head each attribute actually responds to. Unlike the campaign, this keeps
+every generated image, because the images are the deliverable.
+
+Run against a fresh output directory. A checkpointed cell is never
+regenerated, so its images would be missing from the bundle.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from PIL import Image
+
+from ..attributes import AttributeClass
+from ..calibration.harness import calibrate
+from ..hasm import HASM
+from ..heads import HeadUnit
+
+
+@dataclass
+class DemoPaths:
+    root: Path
+
+    def __post_init__(self) -> None:
+        self.root = Path(self.root)
+        for directory in (self.heads, self.blocks, self.latents, self.baselines):
+            directory.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def heads(self) -> Path:
+        return self.root / "heads"
+
+    @property
+    def blocks(self) -> Path:
+        return self.root / "blocks"
+
+    @property
+    def latents(self) -> Path:
+        return self.root / "latents"
+
+    @property
+    def baselines(self) -> Path:
+        return self.root / "baselines"
+
+    def head_image(self, attr: AttributeClass, unit: HeadUnit) -> Path:
+        return self.heads / f"{attr.value}_b{unit.block}_h{unit.head}.png"
+
+    def block_image(self, attr: AttributeClass, block: int) -> Path:
+        return self.blocks / f"{attr.value}_b{block}.png"
+
+    def baseline_image(self, attr: AttributeClass) -> Path:
+        return self.baselines / f"{attr.value}.png"
+
+
+def run_demo_sweep(
+    generate_fn,
+    corpus,
+    block_ids: tuple[int, ...],
+    head_ids: tuple[int, ...],
+    masker,
+    paths: DemoPaths,
+    seeds: list[int],
+    scorer=None,
+    progress=None,
+) -> HASM:
+    """Sweep every head unit, keeping every image, and return the HASM."""
+
+    def on_pair(attr, unit, pair, seed, baseline: Image.Image, swapped: Image.Image):
+        baseline_path = paths.baseline_image(attr)
+        if not baseline_path.exists():
+            baseline.save(baseline_path)
+        swapped.save(paths.head_image(attr, unit))
+
+    hasm = calibrate(
+        generate_fn,
+        corpus=corpus,
+        block_ids=block_ids,
+        head_ids=head_ids,
+        masker=masker,
+        seeds=seeds,
+        scorer=scorer,
+        progress=progress,
+        checkpoint_dir=None,
+        on_pair=on_pair,
+    )
+
+    # Block-level counterpart: the same swap with every head of a block
+    # selected at once, which is what block-level routing does.
+    from ..calibration.harness import SwapSpec
+
+    for attr, pairs in corpus.items():
+        pair = pairs[0]
+        for block in block_ids:
+            image = generate_fn(
+                prompt=pair.base,
+                seed=seeds[0],
+                swap=SwapSpec(
+                    unit=HeadUnit(block=block, head=head_ids[0]), prompt=pair.changed
+                ),
+            )
+            image.save(paths.block_image(attr, block))
+
+    hasm.save(paths.root / "hasm.npz")
+    return hasm
+```
+
+- [ ] **Step 5: Run it to verify it passes**
+
+Run: `./run-local.sh test`
+Expected: PASS — 7 new tests, full suite green
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add flair_t2i/demo/ flair_t2i/calibration/harness.py tests/test_demo_sweep.py
+git commit -m "feat: demo sweep keeps every per-head and per-block image
+
+calibrate() gains an on_pair hook so the demo can retain images the
+campaign discards after measuring."
+```
+
+---
+
+### Task 13: The handoff report
+
+4,039 loose PNGs communicate nothing. The heatmap carries the argument; the images are what you click into from it. Output is one self-contained directory with an `index.html` that needs no Python, no install, and no repo.
+
+**Files:**
+- Create: `flair_t2i/demo/report.py`
+- Create: `scripts/demo.py`
+- Test: `tests/test_demo_report.py`
+
+**Interfaces:**
+- Consumes: `HASM` (Task 3), `DemoPaths` (Task 12).
+- Produces:
+  - `heat_color(score: float) -> str` — CSS colour for a score in `[0, 1]`
+  - `render_report(hasm: HASM, paths: DemoPaths, title: str) -> str` — returns HTML
+  - `write_report(hasm, paths, title) -> Path` — writes `index.html`, returns its path
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_demo_report.py`:
+
+```python
+import numpy as np
+import pytest
+
+from flair_t2i.attributes import AttributeClass
+from flair_t2i.demo.report import heat_color, render_report, write_report
+from flair_t2i.demo.sweep import DemoPaths
+from flair_t2i.hasm import HASM
+
+ATTRS = (AttributeClass.COLOR, AttributeClass.SIZE)
+
+
+def _hasm():
+    tensor = np.array(
+        [
+            [[0.10, 0.90], [0.20, 0.30]],
+            [[1.00, 0.05], [0.40, 0.60]],
+        ]
+    )
+    return HASM(tensor, (0, 1), (0, 1), ATTRS)
+
+
+def test_heat_color_is_a_css_colour():
+    assert heat_color(0.0).startswith("rgb(")
+    assert heat_color(1.0).startswith("rgb(")
+
+
+def test_heat_color_is_monotonic_in_score():
+    assert heat_color(0.0) != heat_color(1.0)
+
+
+def test_report_names_every_attribute(tmp_path):
+    html = render_report(_hasm(), DemoPaths(tmp_path), title="FLAIR")
+    assert "color" in html
+    assert "size" in html
+
+
+def test_report_marks_the_peak_unit_per_attribute(tmp_path):
+    html = render_report(_hasm(), DemoPaths(tmp_path), title="FLAIR")
+    # COLOR peaks at block 1, head 0
+    assert "block 1, head 0" in html
+
+
+def test_report_links_every_head_image(tmp_path):
+    html = render_report(_hasm(), DemoPaths(tmp_path), title="FLAIR")
+    for block in (0, 1):
+        for head in (0, 1):
+            assert f"heads/color_b{block}_h{head}.png" in html
+
+
+def test_report_is_self_contained_html(tmp_path):
+    html = render_report(_hasm(), DemoPaths(tmp_path), title="FLAIR")
+    assert html.lstrip().startswith("<!doctype html>")
+    assert "<style>" in html
+    assert "http://" not in html and "https://" not in html
+
+
+def test_write_report_creates_index_html(tmp_path):
+    path = write_report(_hasm(), DemoPaths(tmp_path), title="FLAIR")
+    assert path == tmp_path / "index.html"
+    assert path.read_text(encoding="utf-8").startswith("<!doctype html>")
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `./run-local.sh test`
+Expected: FAIL — `ModuleNotFoundError: No module named 'flair_t2i.demo.report'`
+
+- [ ] **Step 3: Write the report generator**
+
+Create `flair_t2i/demo/report.py`:
+
+```python
+"""Render the demo sweep as one self-contained HTML page.
+
+The heatmap carries the argument -- which block and which head each
+attribute responds to -- and every cell links to the image that produced
+its score. No external assets, so the output directory can be zipped and
+opened anywhere.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from ..hasm import HASM
+from .sweep import DemoPaths
+
+_CSS = """
+body { font: 15px/1.6 system-ui, sans-serif; margin: 0; padding: 2rem;
+       background: #14151e; color: #eaeaf2; }
+h1 { font-size: 1.6rem; margin: 0 0 .3rem; }
+h2 { font-size: 1.15rem; margin: 2.4rem 0 .2rem; text-transform: capitalize; }
+.sub { color: #9a9db3; margin: 0 0 2rem; }
+.peak { color: #9089d8; font-weight: 600; }
+table { border-collapse: collapse; margin-top: .6rem; }
+caption { text-align: left; color: #9a9db3; font-size: .85rem;
+          padding-bottom: .4rem; }
+th { font: 500 11px monospace; color: #787c93; padding: 2px 4px; }
+td { padding: 0; }
+a.cell { display: block; width: 22px; height: 22px; border: 1px solid #14151e; }
+a.cell:hover { outline: 2px solid #eaeaf2; outline-offset: -2px; }
+.scroll { overflow-x: auto; }
+"""
+
+
+def heat_color(score: float) -> str:
+    """Dark indigo through to hot amber, for a score in [0, 1]."""
+    score = max(0.0, min(1.0, float(score)))
+    red = int(38 + score * (217 - 38))
+    green = int(36 + score * (167 - 36))
+    blue = int(61 + score * (91 - 61))
+    return f"rgb({red}, {green}, {blue})"
+
+
+def render_report(hasm: HASM, paths: DemoPaths, title: str) -> str:
+    parts = [
+        "<!doctype html>",
+        f"<title>{title}</title>",
+        f"<style>{_CSS}</style>",
+        f"<h1>{title}</h1>",
+        '<p class="sub">Each cell is one attention head. Colour is that '
+        "head's measured sensitivity to the attribute; click a cell to see "
+        "the image produced by swapping the attribute at that head alone.</p>",
+    ]
+
+    for attr in hasm.attributes:
+        peak_unit, peak_score = hasm.top_k(attr, 1)[0]
+        parts.append(f"<h2>{attr.value}</h2>")
+        parts.append(
+            f'<p class="sub">peak: <span class="peak">block {peak_unit.block}, '
+            f"head {peak_unit.head}</span> at {peak_score:.3f}</p>"
+        )
+        parts.append('<div class="scroll"><table>')
+        parts.append(
+            "<caption>rows: blocks &nbsp;&middot;&nbsp; columns: heads</caption>"
+        )
+
+        parts.append(
+            "<tr><th></th>"
+            + "".join(f"<th>{head}</th>" for head in hasm.head_ids)
+            + "</tr>"
+        )
+        for block in hasm.block_ids:
+            cells = []
+            for head in hasm.head_ids:
+                from ..heads import HeadUnit
+
+                unit = HeadUnit(block=block, head=head)
+                score = hasm.score(unit, attr)
+                href = paths.head_image(attr, unit).relative_to(paths.root).as_posix()
+                cells.append(
+                    f'<td><a class="cell" href="{href}" '
+                    f'style="background:{heat_color(score)}" '
+                    f'title="block {block}, head {head} -- {score:.3f}"></a></td>'
+                )
+            parts.append(f"<tr><th>B{block}</th>" + "".join(cells) + "</tr>")
+        parts.append("</table></div>")
+
+    return "\n".join(parts)
+
+
+def write_report(hasm: HASM, paths: DemoPaths, title: str) -> Path:
+    path = paths.root / "index.html"
+    path.write_text(render_report(hasm, paths, title), encoding="utf-8")
+    return path
+```
+
+- [ ] **Step 4: Write the driver script**
+
+Create `scripts/demo.py`:
+
+```python
+"""Produce the supervisor demonstration bundle.
+
+    python scripts/demo.py --out flair_head_demo --steps 12
+
+Sweeps all 7 attributes over every (block, head) unit at one contrastive
+pair each -- 7 x (1 + blocks x heads) generations, roughly one fifth the
+full campaign. Writes every image plus an index.html that needs no Python
+to read. Zip the output directory and hand it over.
+"""
+
+import argparse
+from pathlib import Path
+
+import spacy
+import torch
+from diffusers import StableDiffusion3Pipeline
+
+from flair_t2i.attributes import CORE_ATTRIBUTES
+from flair_t2i.calibration.corpus import DEFAULT_CORPUS_PATH, load_corpus
+from flair_t2i.calibration.harness import make_swap_generate_fn
+from flair_t2i.config import FlairConfig
+from flair_t2i.demo.report import write_report
+from flair_t2i.demo.sweep import DemoPaths, run_demo_sweep
+from flair_t2i.hasm import HASM
+from flair_t2i.metrics.embedding import ClipScorer
+from flair_t2i.metrics.masking import ClipSegMasker
+from flair_t2i.pipeline import FlairPipeline
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", type=Path, default=Path("flair_head_demo"))
+    parser.add_argument("--steps", type=int, default=12)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--pairs", type=int, default=1, help="contrastive pairs per attribute"
+    )
+    args = parser.parse_args()
+
+    cfg = FlairConfig(device="cuda")
+    pipe = StableDiffusion3Pipeline.from_pretrained(
+        cfg.model_id, torch_dtype=torch.float16
+    )
+    pipe.enable_model_cpu_offload()
+
+    n_blocks = len(pipe.transformer.transformer_blocks)
+    n_heads = pipe.transformer.transformer_blocks[0].attn.heads
+    block_ids, head_ids = tuple(range(n_blocks)), tuple(range(n_heads))
+
+    fp = FlairPipeline(
+        pipe,
+        cfg,
+        HASM.uniform((0,), (0,), CORE_ATTRIBUTES),
+        nlp=spacy.load("en_core_web_sm"),
+    )
+
+    corpus = {
+        attr: pairs[: args.pairs]
+        for attr, pairs in load_corpus(DEFAULT_CORPUS_PATH).items()
+    }
+    total = len(corpus) * args.pairs * (1 + n_blocks * n_heads)
+    print(f"{n_blocks} blocks x {n_heads} heads = {n_blocks * n_heads} units")
+    print(f"{len(corpus)} attributes x {args.pairs} pair(s) -- {total} generations\n")
+
+    hasm = run_demo_sweep(
+        make_swap_generate_fn(fp, steps=args.steps),
+        corpus=corpus,
+        block_ids=block_ids,
+        head_ids=head_ids,
+        masker=ClipSegMasker(device=cfg.device),
+        paths=DemoPaths(args.out),
+        seeds=[args.seed],
+        scorer=ClipScorer(device=cfg.device),
+        progress=lambda attr, unit, value: print(
+            f"  {attr.value:<9} B{unit.block:<3}H{unit.head:<3} raw={value:.4f}"
+        ),
+    )
+
+    report = write_report(hasm, DemoPaths(args.out), title="FLAIR — head-level routing")
+    print(f"\nwrote {report}")
+    for attr in hasm.attributes:
+        unit, score = hasm.top_k(attr, 1)[0]
+        print(f"  {attr.value:<9} peaks at B{unit.block} H{unit.head}  ({score:.3f})")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 5: Run it to verify it passes**
+
+Run: `./run-local.sh test`
+Expected: PASS — 7 new tests, full suite green
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add flair_t2i/demo/report.py scripts/demo.py tests/test_demo_report.py
+git commit -m "feat: self-contained HTML demo report
+
+One index.html with a per-attribute block-by-head heatmap; every cell
+links to the image that produced its score. No external assets, so the
+bundle opens anywhere."
+```
+
+---
+
+## Execution order
+
+Tasks are numbered in dependency order, but they do **not** all run before the supervisor sees results:
+
+```
+Tasks 1-9      build the machinery                    CPU only
+Tasks 11-13    demo harness, latents, report          CPU only
+     ↓
+Demo sweep     scripts/demo.py                        ~4,039 generations
+     ↓
+👤 SUPERVISOR REVIEW — index.html
+     ↓
+Task 10        full campaign script + docs            ~20,195 generations
+```
+
+Task 10 is written last deliberately. There is no reason to build the full-campaign driver, or to spend five-pair compute, before the supervisor has agreed the direction is right. The demo de-risks roughly 15 A100-hours behind a 3-hour check.
+
 ## Post-plan verification
 
-After Task 10, confirm the whole change on Kaggle before spending campaign compute:
+Before the demo sweep, on Kaggle:
 
 1. `python scripts/verify_api.py` — all 19 checks pass
 2. `python -m pytest -q` — full suite green
 3. `python scripts/smoke_test.py --steps 20 --out outputs/` — images generate, `units touched` lists head units
-4. Record `N_BLOCKS`, `N_HEADS`, and `T_GEN` in `calibration_runs/measurements.txt`; recompute the campaign budget as `A × P × S × (1 + N_BLOCKS × N_HEADS)`
+4. Record `N_BLOCKS`, `N_HEADS`, and `T_GEN` in `calibration_runs/measurements.txt`
 
-Only then start the campaign.
+Then `python scripts/demo.py --out flair_head_demo --steps 12`, zip the output, and hand it over. Recompute the full-campaign budget as `A × P × S × (1 + N_BLOCKS × N_HEADS)` only after that review.
