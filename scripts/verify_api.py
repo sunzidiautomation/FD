@@ -148,6 +148,12 @@ def main() -> int:
         in inspect.signature(JointTransformerBlock.__init__).parameters,
     )
 
+    # pipeline.encode_components projects text embeddings through context_embedder
+    from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel
+
+    transformer_src = "".join(inspect.getsource(SD3Transformer2DModel.__init__).split())
+    check("SD3Transformer2DModel has context_embedder", "self.context_embedder=" in transformer_src)
+
     failed = [name for name, status in CHECKS if status == "FAIL"]
     print()
     if failed:

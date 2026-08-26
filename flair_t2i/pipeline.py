@@ -52,6 +52,16 @@ class FlairPipeline:
             do_classifier_free_guidance=False,
             max_sequence_length=self.cfg.max_sequence_length,
         )
+        if hasattr(self.pipe, "transformer") and hasattr(
+            self.pipe.transformer, "context_embedder"
+        ):
+            embedder = self.pipe.transformer.context_embedder
+            prompt_embeds = embedder(
+                prompt_embeds.to(
+                    device=embedder.weight.device, dtype=embedder.weight.dtype
+                )
+            )
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return {c.id: prompt_embeds[i] for i, c in enumerate(components)}

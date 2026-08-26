@@ -144,3 +144,18 @@ def test_generate_restores_original_projections(monkeypatch):
         for b in pipe.transformer.transformer_blocks
     ]
     assert after == before
+
+
+def test_encode_components_projects_through_context_embedder_when_present():
+    pipe = StubPipe()
+    # Mock context_embedder mapping DIM (8) to OUT_DIM (12)
+    OUT_DIM = 12
+    pipe.transformer.context_embedder = torch.nn.Linear(DIM, OUT_DIM)
+    fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())
+    components = [Component(id="c_color", text="a red car", attr=AttributeClass.COLOR)]
+
+    embeddings = fp.encode_components(components)
+
+    assert set(embeddings) == {"c_color"}
+    assert embeddings["c_color"].shape == (SEQ, OUT_DIM)
+
