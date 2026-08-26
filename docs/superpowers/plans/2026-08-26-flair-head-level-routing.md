@@ -1203,10 +1203,18 @@ to:
 
 - [ ] **Step 5: Run the suite**
 
-`tests/test_processor.py` will still fail here — `FlairJointProcessor` calls `plan.blend`, which no longer exists. Task 7 retires it. Confirm that is the *only* remaining failure:
+Removing `RoutedComponent.blocks` and `RoutingPlan.blend` breaks three downstream files at once. All three are fixed by later tasks — **do not fix them here.**
 
 Run: `./run-local.sh test`
-Expected: `tests/test_routing.py` fully green; failures confined to `tests/test_processor.py`
+Expected: **206 passed, 7 failed**, with `tests/test_routing.py` fully green (17 tests) and the failures exactly:
+
+| File | Failures | Cause | Fixed by |
+|---|---|---|---|
+| `tests/test_processor.py` | 2 | `FlairJointProcessor` calls the removed `plan.blend` | Task 7 |
+| `tests/test_pipeline.py` | 2 | `pipeline.py` uses `install_flair` and a BASM | Task 8 |
+| `tests/test_artifacts.py` | 3 | `artifacts.py:110` reads the removed `rc.blocks` | Task 8 |
+
+Note `tests/test_fuzzy_integration.py` needs more than the one-line edit named in Step 4: its `_basm()` helper builds a `BASM` and hands it to `build_routing_plan`, which now takes a `HASM`. `BASM.top_k` duck-types far enough to return, then dies in `RoutingPlan.__post_init__` on `unit.block` where `unit` is an `int`. Replace the helper with a `_hasm()` building `blocks (3, 7, 11) × head (0,) × SIZE` at the same 0.4/0.9/0.6 scores, and change its two `plan.alpha(..., 7, 0.0)` calls to pass `HeadUnit(7, 0)`.
 
 - [ ] **Step 6: Commit**
 
@@ -1805,6 +1813,20 @@ with:
                 [int(u.block), int(u.head), float(s)] for u, s in rc.units
             ],
 ```
+
+**This renames the emitted JSON key, so `tests/test_artifacts.py` must move with it.** Task 5 already converted that file's `RoutedComponent` fixture to `units=((HeadUnit(7, 0), 0.93), (HeadUnit(3, 0), 0.22))`, but its assertion still reads the old key. Change:
+
+```python
+    assert entry["blocks"] == [[7, 0.93], [3, 0.22]]
+```
+
+to:
+
+```python
+    assert entry["units"] == [[7, 0, 0.93], [3, 0, 0.22]]
+```
+
+Three `tests/test_artifacts.py` tests are red coming into this task (they broke in Task 5 when `rc.blocks` was removed); this edit plus the `artifacts.py` change is what makes them green again.
 
 In `scripts/explain.py`, import `from flair_t2i.hasm import HASM` (replacing the `BASM` import) and replace the `synthetic_basm` helper (lines 50-63) with:
 
