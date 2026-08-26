@@ -115,10 +115,10 @@ scripts/smoke_test.py :: main()                                smoke_test.py:38
 │   │       -> intensities {"c_color": 1.138}, k_overrides {"c_color": 1}
 │   │          Fuzzy is now FINISHED. Two numbers. Nothing else survives.
 │   │
-│   ├── B6  build_routing_plan(routable, embeddings, basm,
+│   ├── B6  build_routing_plan(routable, embeddings, hasm,
 │   │                          cfg, intensities, k_overrides)  routing.py:92
-│   │    └── per component: basm.top_k(attr, k)                   basm.py
-│   │           -> [(block_id, score), ...]  which blocks to push into
+│   │    └── per component: hasm.top_k(attr, k)                   hasm.py
+│   │           -> [(HeadUnit(block, head), score), ...]
 │   │       -> RoutingPlan(routed=(RoutedComponent, ...))       routing.py:31
 │   │
 │   ├── B7  CoherenceGuard(cfg)                                  guard.py:28
@@ -127,9 +127,9 @@ scripts/smoke_test.py :: main()                                smoke_test.py:38
 │   │           worst < 0.55 -> GuardEvent -> apply() halves alpha_scale
 │   │           (needs >=2 components, else returns None)
 │   │
-│   └── B8  install_flair(pipe.transformer, ref)               patching.py:15
-│            for every block: attn.get_processor() saved, replaced with
-│            FlairJointProcessor(original, block_id, ref).
+│   └── B8  install_head_routing(pipe.transformer, ref)         patching.py:15
+│            for every block: wraps add_q_proj, add_k_proj, add_v_proj
+│            in HeadResidualProj(inner, block_id, plan, ref).
 │            Returns handles so teardown can restore the originals.
 │
 ├── [C] DENOISING — self.pipe(...) hands control to diffusers  pipeline.py:87
@@ -137,40 +137,26 @@ scripts/smoke_test.py :: main()                                smoke_test.py:38
 │   │   FOR each step t in 0..steps-1:
 │   │     FOR each block l in 0..N_BLOCKS-1:      <-- 20 x 24 = 480 calls
 │   │
-│   ├──── FlairJointProcessor.__call__(attn, hs, ehs)        processor.py:47
+│   ├──── HeadResidualProj.__call__(hidden_states)           head_proj.py
 │   │     │
+│   │     ├── base_proj = inner(hidden_states)               Linear proj
 │   │     ├── ref.step_frac()   = step / total_steps         processor.py:25
 │   │     ├── ref.cond_slice(B) = slice(B//2, B) under CFG    processor.py:30
 │   │     │      diffusers packs [negative, positive]; the conditional
-│   │     │      half is the tail. Writing the wrong half would inject
-│   │     │      into the negative prompt.
+│   │     │      half is the tail.
 │   │     │
-│   │     ├── plan.blend(ehs, block_id, step_frac, cond_slice) routing.py:54
+│   │     ├── plan.alpha_vector(block_id, step_frac)         routing.py
 │   │     │    │
-│   │     │    ├── FAST PATH: block not routed, or plan inactive
-│   │     │    │              -> return unchanged             routing.py:62
-│   │     │    │              (this is most of the 480 calls)
-│   │     │    │
-│   │     │    ├── per contributing component: alpha(...)     routing.py:47
-│   │     │    │     ├── score = S[l, a]                         basm.py
-│   │     │    │     ├── timestep_scale(step_frac, t_window)  schedule.py:9
-│   │     │    │     │     1.0 at window start -> 0.0 at window end,
-│   │     │    │     │     0.0 entirely outside. Text influence is
-│   │     │    │     │     strong early and gone late.
-│   │     │    │     └── alpha = alpha_0 * score * intensity
-│   │     │    │                 * sched(t) * alpha_scale
-│   │     │    │
-│   │     │    ├── sequence-length check -> ValueError        routing.py:76
-│   │     │    └── out[cond] += alpha * (embedding - base)    routing.py:87
+│   │     │    └── per head h: alpha = alpha_0 * S[l, h, a] * intensity
+│   │     │                            * sched(t) * alpha_scale
 │   │     │
-│   │     └── self.inner(attn, hs, ehs_blended, ...)         processor.py:63
-│   │            delegates to the REAL processor. No attention maths is
-│   │            reimplemented anywhere in FLAIR.
+│   │     └── out[cond] += Σ_i (Δ_emb_i @ W.T) * alpha_vector_i[head_slice]
+│   │            applied post-projection, weight-only, before QK norm
 │   │
 │   └──── on_step callback -> ref.step = step_index          pipeline.py:83
 │
-├── [D] TEARDOWN — finally: uninstall_flair(handles)         pipeline.py:95
-│        restores every original processor, even if generation raised
+├── [D] TEARDOWN — finally: uninstall_head_routing(handles)   pipeline.py:95
+│        restores every original linear module
 │        -> return result.images[0]                          pipeline.py:97
 │
 └── [E] SAVING — back in smoke_test.py
@@ -186,7 +172,7 @@ scripts/smoke_test.py :: main()                                smoke_test.py:38
     │   every completed run readable.
     │
     ├── writes calibration_runs/measurements.txt            smoke_test.py:118
-    │      N_BLOCKS, T_GEN, STEPS  <-- the campaign budget derives from these
+    │      N_BLOCKS, N_HEADS, T_GEN, STEPS  <-- the campaign budget derives from these
     │
     └── summarise(out_dir)                                     artifacts.py
 ```
@@ -194,10 +180,10 @@ scripts/smoke_test.py :: main()                                smoke_test.py:38
 **The equation, and which file owns each term:**
 
 ```
-H_l = H_base + SUM_i  alpha_i(t) * (H_i - H_base)
+H_{l,h} = H_{base,h} + SUM_i  alpha_i(l,h,t) * (H_{i,h} - H_{base,h})
 
-alpha_i(t) = alpha_0  *  S[l,a]  *  intensity_i  *  sched(t)  *  alpha_scale
-             config.py   basm.py    hedges.py      schedule.py   guard.py
+alpha_i(l,h,t) = alpha_0  *  S[l,h,a]  *  intensity_i  *  sched(t)  *  alpha_scale
+                 config.py   hasm.py       hedges.py      schedule.py   guard.py
 ```
 
 ---
@@ -212,8 +198,8 @@ scripts/calibrate.py prefilter --top-n 10                    calibrate.py:56
 │
 ├── _pipeline(cfg)                                           calibrate.py:46
 │      loads SD3.5, fp16, cpu-offload
-│      BASM.uniform((0,), CORE_ATTRIBUTES)  <-- placeholder, never read;
-│                                               this phase does not route
+│      HASM.uniform((0,), (0,), CORE_ATTRIBUTES)  <-- placeholder, never read;
+│                                                     this phase does not route
 │
 ├── n_blocks = len(transformer.transformer_blocks)
 │   total = prompts x seeds x (1 + n_blocks)  =  3 x 1 x 25  =  75 gens
@@ -250,14 +236,13 @@ scripts/calibrate.py prefilter --top-n 10                    calibrate.py:56
 
 ---
 
-# TREE 3 — Calibration, phase 2: build the BASM
+# TREE 3 — Calibration, phase 2: build the HASM
 
 The expensive phase. Hours. This produces the first real result.
 
 ```
-scripts/calibrate.py basm --vitality ... --seeds 0           calibrate.py:93
+scripts/calibrate.py hasm --seeds 0                          calibrate.py:93
 │
-├── VitalityReport.load(vitality.json)  -> vital blocks      prefilter.py:54
 ├── load_corpus(data/contrastive_pairs.json)                     corpus.py
 │      35 pairs. validate_corpus enforces ONE WORD of difference
 │      between base and changed — two diffs would attribute the image
@@ -265,10 +250,11 @@ scripts/calibrate.py basm --vitality ... --seeds 0           calibrate.py:93
 │
 └── calibrate(...)                                             harness.py:126
     │
-    │   FOR each attribute a  (column)
-    │     FOR each vital block l  (row)
+    │   FOR each attribute a  (plane)
+    │     FOR each block l    (row)
+    │       FOR each head h   (col)
     │
-    ├──── _load_cell(cells/<attr>_<block>.json)                harness.py:56
+    ├──── _load_cell(cells/<attr>_<block>_<head>.json)          harness.py:56
     │        already done -> SKIP, reuse the raw value.
     │        missing / truncated / corrupt -> None -> recompute.
     │        THIS is what makes a 12-hour Kaggle timeout survivable.
@@ -289,11 +275,11 @@ scripts/calibrate.py basm --vitality ... --seeds 0           calibrate.py:93
     │     ├── baseline = generate(pair.base, seed, swap=None)
     │     │
     │     ├── swapped  = generate(pair.base, seed,
-    │     │                       swap=SwapSpec(block_id, pair.changed))
+    │     │                       swap=SwapSpec(HeadUnit(block, head), pair.changed))
     │     │   └── make_swap_generate_fn                       harness.py:175
     │     │          alpha_0=1.0 AND t_window=(0.0,1.0), so
     │     │            H = H_base + 1.0*(H_changed - H_base) = H_changed
-    │     │          i.e. an exact replacement at ONE block, reusing the
+    │     │          i.e. an exact replacement at ONE head, reusing the
     │     │          routing machinery instead of a second injection path
     │     │          that could drift from it.
     │     │
@@ -309,15 +295,16 @@ scripts/calibrate.py basm --vitality ... --seeds 0           calibrate.py:93
     │
     ├──── _save_cell(...)                                      harness.py:64
     │        writes the RAW value, not the normalised one — normalisation
-    │        depends on the whole column, which is not finished yet.
+    │        depends on the whole plane, which is not finished yet.
     │
-    ├──── _normalise(column)  after each column completes       harness.py:81
-    │        min-max onto [0,1]. A flat column -> all zeros, not a
+    ├──── _normalise(plane)  after each attribute plane completes harness.py:81
+    │        min-max onto [0,1]. A flat plane -> all zeros, not a
     │        spurious peak.
     │
-    └── basm.save("calibration_runs/basm.npz")                     basm.py
-        +  WARNING if every attribute peaks on the same block
-                                                             calibrate.py:123
+    └── hasm.save("calibration_runs/hasm.npz")                    hasm.py
+        + hasm.to_basm().save("calibration_runs/basm.npz")
+        + WARNING if every attribute peaks on the same block
+                                                              calibrate.py:123
 ```
 
 ---
@@ -327,11 +314,11 @@ scripts/calibrate.py basm --vitality ... --seeds 0           calibrate.py:93
 ```
 scripts/explain.py "a very red car" --save outputs/
 │
-├── BASM.uniform(...)              synthetic; there is no real one yet
+├── HASM.uniform(...)              synthetic; there is no real one yet
 ├── parse_prompt(...)              parsing.py     <-- real
 ├── resolve_components(...)        fuzzy/         <-- real
 ├── build_routing_plan(...)        routing.py     <-- real
-└── prints components, hedges, intensities, chosen blocks, alpha decay
+└── prints components, hedges, intensities, chosen head units, alpha decay
 
     NO text encoder, NO diffusion, NO image.
     Every DECISION FLAIR makes is CPU-only; the GPU only turns those
@@ -343,19 +330,19 @@ scripts/explain.py "a very red car" --save outputs/
 # The order across the whole project
 
 ```
- 1. ./run-local.sh test              175 tests            local   4s
+ 1. ./run-local.sh test              full suite           local   4s
  2. verify_env.py                    imports OK           Kaggle  1m
- 3. verify_api.py                    12 diffusers checks  Kaggle  1m
- 4. smoke_test.py                    5 images, N_BLOCKS, T_GEN
+ 3. verify_api.py                    19 diffusers checks  Kaggle  1m
+ 4. smoke_test.py                    images, N_BLOCKS, N_HEADS, T_GEN
  5. (budget arithmetic)                                   local   2m
- 6. calibrate.py prefilter           vitality.json        Kaggle  20m
- 7. calibrate.py basm                basm.npz             Kaggle  2-6h
+ 6. calibrate.py prefilter           vitality.json        Kaggle  20m (for FLUX)
+ 7. calibrate.py hasm                hasm.npz, basm.npz   Kaggle  2-6h
  8. (the Week 4 gate: distinct peaks per attribute?)
- 9. smoke_test.py --basm basm.npz    the first REAL images
+ 9. smoke_test.py --hasm hasm.npz    the first REAL images
 10. bundle + download                everything survives the session
 ```
 
-Steps 4 -> 5 -> 6 -> 7 cannot be reordered: 4 measures the numbers 5 needs,
-and 6 produces the file 7 requires.
+Steps 4 -> 5 -> 7 cannot be reordered: 4 measures the numbers 5 needs,
+and 7 produces the files 9 requires.
 
 See `RUNBOOK.md` for the commands and what to check at each step.

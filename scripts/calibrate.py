@@ -1,13 +1,14 @@
-"""Run the BASM calibration campaign on Kaggle GPU.
+"""Run the HASM calibration campaign on Kaggle GPU.
 
 Two phases, separately resumable:
 
     python scripts/calibrate.py prefilter --top-n 10 --out calibration_runs/
-    python scripts/calibrate.py basm --vitality calibration_runs/vitality.json \
-        --seeds 0 1 --out calibration_runs/
+    python scripts/calibrate.py hasm --seeds 0 --out calibration_runs/
 
-The BASM phase checkpoints every (attribute, block) cell as it completes.
-Re-run the same command after a session times out and it resumes.
+The HASM phase sweeps every (attribute, block, head) cell and checkpoints
+each one as it completes. Re-run the same command after a session times
+out and it resumes. The prefilter phase is retained for the FLUX port; the
+HASM phase does not read its output.
 
 Choose --top-n from the vitality elbow the prefilter prints; see the master
 roadmap section 2.3. Choose --seeds from the budget arithmetic in section
@@ -22,7 +23,6 @@ import torch
 from diffusers import StableDiffusion3Pipeline
 
 from flair_t2i.attributes import CORE_ATTRIBUTES
-from flair_t2i.basm import BASM
 from flair_t2i.calibration.corpus import DEFAULT_CORPUS_PATH, load_corpus
 from flair_t2i.calibration.harness import calibrate, make_swap_generate_fn
 from flair_t2i.calibration.prefilter import (
@@ -32,6 +32,7 @@ from flair_t2i.calibration.prefilter import (
     run_prefilter,
 )
 from flair_t2i.config import FlairConfig
+from flair_t2i.hasm import HASM
 from flair_t2i.metrics.embedding import ClipScorer
 from flair_t2i.metrics.masking import ClipSegMasker
 from flair_t2i.pipeline import FlairPipeline
@@ -49,13 +50,13 @@ def _pipeline(cfg: FlairConfig) -> FlairPipeline:
     )
     pipe.enable_model_cpu_offload()
     # Calibration never reads this matrix; it swaps prompts directly.
-    placeholder = BASM.uniform((0,), CORE_ATTRIBUTES)
+    placeholder = HASM.uniform((0,), (0,), CORE_ATTRIBUTES)
     return FlairPipeline(pipe, cfg, placeholder, nlp=spacy.load("en_core_web_sm"))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["prefilter", "basm"])
+    parser.add_argument("phase", choices=["prefilter", "hasm"])
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--seeds", type=int, nargs="+", default=[0])
     parser.add_argument("--top-n", type=int, default=10)
@@ -90,41 +91,47 @@ def main() -> None:
         print(f"elbow rule suggests:  {report.elbow()}")
         return
 
-    if args.vitality is None:
-        parser.error("basm phase needs --vitality")
-
-    vital = VitalityReport.load(args.vitality).vital_blocks
     corpus = load_corpus(DEFAULT_CORPUS_PATH)
+    n_blocks = len(fp.pipe.transformer.transformer_blocks)
+    n_heads = fp.pipe.transformer.transformer_blocks[0].attn.heads
+    block_ids = tuple(range(n_blocks))
+    head_ids = tuple(range(n_heads))
+
     pairs = sum(len(v) for v in corpus.values())
-    total = pairs * len(args.seeds) * 2 * len(vital)
-    print(f"calibrating {len(corpus)} attributes over blocks {vital}")
-    print(f"{pairs} pairs x {len(args.seeds)} seed(s) -- up to {total} generations")
+    units = n_blocks * n_heads
+    total = pairs * len(args.seeds) * (1 + units)
+    print(f"calibrating {len(corpus)} attributes over {units} head units")
+    print(f"  {n_blocks} blocks x {n_heads} heads")
+    print(f"  {pairs} pairs x {len(args.seeds)} seed(s) -- up to {total} generations")
     print(f"checkpointing to {args.out / 'cells'} -- safe to re-run after a timeout\n")
 
-    basm = calibrate(
+    hasm = calibrate(
         make_swap_generate_fn(fp, steps=args.steps),
         corpus=corpus,
-        vital_blocks=vital,
+        block_ids=block_ids,
+        head_ids=head_ids,
         masker=ClipSegMasker(device=cfg.device),
         seeds=args.seeds,
         scorer=ClipScorer(device=cfg.device),
         checkpoint_dir=args.out,
-        progress=lambda attr, block, value: print(
-            f"  {attr.value:<9} B{block:<3} raw={value:.4f}"
+        progress=lambda attr, unit, value: print(
+            f"  {attr.value:<9} B{unit.block:<3}H{unit.head:<3} raw={value:.4f}"
         ),
     )
-    basm.save(args.out / "basm.npz")
+    hasm.save(args.out / "hasm.npz")
+    hasm.to_basm().save(args.out / "basm.npz")
 
-    print("\ncalibrated BASM:")
-    for attr in basm.attributes:
-        print(f"  {attr.value:<9} top blocks: {basm.top_k(attr, 3)}")
+    print("\ncalibrated HASM:")
+    for attr in hasm.attributes:
+        print(f"  {attr.value:<9} top units: {hasm.top_k(attr, 3)}")
 
+    basm = hasm.to_basm()
     peaks = {attr: basm.top_k(attr, 1)[0][0] for attr in basm.attributes}
     if len(set(peaks.values())) == 1:
         print("\n  WARNING: every attribute peaks on the same block.")
         print("  There is no disentanglement to exploit -- see roadmap 2.5.")
 
-    print(f"\nwrote {args.out / 'basm.npz'}")
+    print(f"\nwrote {args.out / 'hasm.npz'} and {args.out / 'basm.npz'}")
 
 
 if __name__ == "__main__":

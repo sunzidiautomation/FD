@@ -194,29 +194,28 @@ Writes `calibration_runs/vitality.json`.
 
 ---
 
-## Phase 6 · BASM calibration ☁️ ⏱ 2-6 hours
+## Phase 6 · HASM calibration ☁️ ⏱ 2-6 hours
 
 The expensive phase, and the one that produces the first real result.
 
 ```python
-!python scripts/calibrate.py basm \
-    --vitality calibration_runs/vitality.json \
+!python scripts/calibrate.py hasm \
     --seeds 0 \
     --out calibration_runs/
 ```
 
 ✅ **Expect a running log:**
 ```
-  identity  B5   raw=0.0312
-  identity  B7   raw=0.1847
-  color     B5   raw=0.0203
+  identity  B5 H1  raw=0.0312
+  identity  B7 H3  raw=0.1847
+  color     B5 H0  raw=0.0203
   ...
 ```
 
 ### If the session dies
 
 **Just run the exact same command again.** Every completed
-(attribute, block) cell is checkpointed to `calibration_runs/cells/` and
+(attribute, block, head) cell is checkpointed to `calibration_runs/cells/` and
 skipped on resume. A 12-hour timeout costs you the current cell, not the
 campaign.
 
@@ -224,40 +223,41 @@ campaign.
 !ls calibration_runs/cells/ | wc -l     # cells done so far
 ```
 
-Total cells = attributes × blocks (7 × 10 = 70).
+Total cells = attributes × blocks × heads (e.g. 7 × 24 × 24 = 4032, or across vital units).
 
-Writes `calibration_runs/basm.npz`.
+Writes `calibration_runs/hasm.npz` and derived `calibration_runs/basm.npz`.
 
 ---
 
 ## Phase 7 · The Week 4 gate ☁️ ⏱ 5 min
 
-**Check this before building anything on the matrix.** A BASM that fails
+**Check this before building anything on the matrix.** A HASM that fails
 here is measuring noise, and every downstream number would be meaningless.
 
 ```python
 import numpy as np
-from flair_t2i.basm import BASM
+from flair_t2i.hasm import HASM
 
-basm = BASM.load("calibration_runs/basm.npz")
+hasm = HASM.load("calibration_runs/hasm.npz")
 
-print(f"{'attribute':<10} {'top blocks':<28} {'max':>6}")
-for attr in basm.attributes:
-    top = basm.top_k(attr, 3)
-    print(f"{attr.value:<10} {str(top):<28} {basm.matrix[:, basm.attributes.index(attr)].max():.3f}")
+print(f"{'attribute':<10} {'top head units':<32} {'max':>6}")
+for attr in hasm.attributes:
+    top = hasm.top_k(attr, 3)
+    p = hasm.attributes.index(attr)
+    print(f"{attr.value:<10} {str(top):<32} {hasm.tensor[:, :, p].max():.3f}")
 
-peaks = {a: basm.top_k(a, 1)[0][0] for a in basm.attributes}
-print(f"\npeak block per attribute: {peaks}")
-print(f"distinct peaks: {len(set(peaks.values()))} of {len(peaks)}")
+peaks = {a: hasm.top_k(a, 1)[0][0] for a in hasm.attributes}
+print(f"\npeak unit per attribute: {peaks}")
+print(f"distinct peak units: {len(set(peaks.values()))} of {len(peaks)}")
 ```
 
 **Three checks:**
 
 1. **No dead column.** No attribute may be all-zero after normalisation.
-2. **Selectivity.** For the 4 core attributes, the top block should clearly
-   exceed the column median — not a flat field.
+2. **Selectivity.** For the 4 core attributes, the top head unit should clearly
+   exceed the plane median — not a flat field.
 3. **Distinct peaks.** ⚠️ **If Color, Size, and Lighting all peak on the same
-   block, there is no disentanglement to exploit and the paper's premise is
+   block/head, there is no disentanglement to exploit and the paper's premise is
    in trouble.** `calibrate.py` prints a warning when this happens.
 
 Check 3 failing is an early signal of a Week 7 no-go. Raise it then, not
@@ -265,18 +265,18 @@ after evaluation.
 
 ---
 
-## Phase 8 · Generate with the real BASM ☁️ ⏱ 15 min
+## Phase 8 · Generate with the real HASM ☁️ ⏱ 15 min
 
 Now routing means something.
 
 ```python
 !python scripts/smoke_test.py --steps 20 --seed 0 \
-    --basm calibration_runs/basm.npz \
+    --hasm calibration_runs/hasm.npz \
     --tag calibrated \
     --out /kaggle/working/outputs
 ```
 
-✅ **Expect** `blocks touched:` to list **several distinct blocks**, not
+✅ **Expect** `units touched:` and `blocks touched:` to list **distinct units**, not
 `[0]`. Compare `calibrated_routed.png` against `smoke_baseline.png`.
 
 This is the first image that demonstrates the method rather than the

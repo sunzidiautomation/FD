@@ -35,27 +35,28 @@ There are two execution paths. **Calibration (1b) runs offline, once, and
 produces the `basm.npz` that generation (1a) then reads.** Nothing in 1b runs
 while you are making pictures.
 
-### 1a — The generation path
-
 | # | File | Responsibility | Runs when |
 |---|---|---|---|
 | 1 | `flair_t2i/attributes.py` | The 7 attribute classes | import |
 | 2 | `flair_t2i/config.py` | `FlairConfig` — α₀, timestep window, guard thresholds, model id | import |
 | 3 | `flair_t2i/components.py` | `Component`, `TextBatchLayout` | import |
-| 4 | `flair_t2i/basm.py` | Sensitivity matrix: `score()`, `top_k()`, save/load | setup + per prompt |
-| 5 | `flair_t2i/pipeline.py` | `FlairPipeline` — the orchestrator | entry point |
-| 6 | `flair_t2i/parsing.py` | Prompt → `Component` list (spaCy) | per prompt |
-| 7 | `flair_t2i/fuzzy/membership.py` | Membership curves per attribute universe | per prompt |
-| 8 | `flair_t2i/fuzzy/hedges.py` | Zadeh operators → intensity + routing breadth | per prompt |
-| 9 | `flair_t2i/fuzzy/resolve.py` | Runs 7+8 over every component | per prompt |
-| 10 | `flair_t2i/routing.py` | `build_routing_plan()`, and `blend()` — the injection | per prompt, then **per block per step** |
-| 11 | `flair_t2i/guard.py` | Coherence checks, α back-off | per prompt |
-| 12 | `flair_t2i/patching.py` | Installs/removes processors; `bypass_blocks` | per generation |
-| 13 | `flair_t2i/processor.py` | `PlanRef`, `FlairJointProcessor` — the hook | **per block per step** |
-| 14 | `flair_t2i/artifacts.py` | Run records, manifest, provenance | after each generation |
-| 15 | `flair_t2i/schedule.py` | `timestep_scale()` — early strong, late weak | **per block per step** |
+| 4 | `flair_t2i/heads.py` | `HeadUnit` (block, head) coordinate | import |
+| 5 | `flair_t2i/hasm.py` | Sensitivity tensor: `score()`, `top_k()`, `to_basm()`, save/load | setup + per prompt |
+| 6 | `flair_t2i/basm.py` | Reduced sensitivity matrix: `score()`, `top_k()`, save/load | derived from HASM |
+| 7 | `flair_t2i/pipeline.py` | `FlairPipeline` — the orchestrator | entry point |
+| 8 | `flair_t2i/parsing.py` | Prompt → `Component` list (spaCy) | per prompt |
+| 9 | `flair_t2i/fuzzy/membership.py` | Membership curves per attribute universe | per prompt |
+| 10 | `flair_t2i/fuzzy/hedges.py` | Zadeh operators → intensity + routing breadth | per prompt |
+| 11 | `flair_t2i/fuzzy/resolve.py` | Runs 9+10 over every component | per prompt |
+| 12 | `flair_t2i/routing.py` | `build_routing_plan()` on head units | per prompt |
+| 13 | `flair_t2i/guard.py` | Coherence checks, α back-off | per prompt |
+| 14 | `flair_t2i/patching.py` | `install_head_routing`/`uninstall_head_routing`; `bypass_blocks` | per generation |
+| 15 | `flair_t2i/head_proj.py` | `HeadResidualProj` — wraps `add_q_proj`, `add_k_proj`, `add_v_proj` | **per block per step** |
+| 16 | `flair_t2i/processor.py` | `PlanRef` — mutable step handle | per step |
+| 17 | `flair_t2i/artifacts.py` | Run records, manifest, provenance | after each generation |
+| 18 | `flair_t2i/schedule.py` | `timestep_scale()` — early strong, late weak | **per block per step** |
 
-Rows 10, 13, 14 run in the hot loop: `steps × blocks` times per image (20 steps × 24 blocks ≈ 480 calls).
+Rows 15, 18 run in the hot loop: `steps × blocks` times per image (20 steps × 24 blocks ≈ 480 calls).
 
 ### 1b — The calibration path (offline, produces the BASM)
 
@@ -167,21 +168,15 @@ B8. install_flair(pipe.transformer, ref)                          patching.py
 FOR each denoising step t (0 … steps-1):
   FOR each transformer block ℓ (0 … N_BLOCKS-1):
 
-    FlairJointProcessor.__call__(attn, hidden_states, encoder_hidden_states)
-    │                                                          processor.py
-    ├─ ref.step_frac()          = step / total_steps
-    ├─ ref.cond_slice(B)        = slice(B//2, B) under CFG
-    │                             (diffusers packs [negative, positive])
-    └─ plan.blend(ehs, ℓ, step_frac, cond_slice)               routing.py
-       ├─ FAST PATH: block ℓ not routed, or plan inactive → return unchanged
-       ├─ per contributing component:
-       │  └─ alpha(rc, ℓ, step_frac)
-       │     ├─ S[ℓ,a]                      ← BASM score for this block
-       │     ├─ timestep_scale(...)         ← schedule.py, 1.0 → 0.0 over window
-       │     └─ α = α₀ · S[ℓ,a] · intensity · sched(t) · alpha_scale
-       └─ out[cond_slice] += α · (component_embedding − base_embedding)
-    │
-    └─ delegate to inner JointAttnProcessor2_0  ← real attention, untouched
+    HeadResidualProj.__call__(hidden_states)               head_proj.py
+    │  wraps attn.add_q_proj, attn.add_k_proj, attn.add_v_proj
+    ├─ base_proj = inner(hidden_states)                   weight + bias
+    ├─ ref.step_frac() = step / total_steps
+    ├─ ref.cond_slice(B) = slice(B//2, B) under CFG
+    ├─ plan.alpha_vector(ℓ, step_frac)                     routing.py
+    │  └─ per head h: α(ℓ, h, t) = α₀ · S[ℓ,h,a] · intensity · sched(t) · alpha_scale
+    └─ out[cond_slice] += Σ_i (Δ_emb_i @ W.T) * alpha_vector_i[head_slice]
+       (applied post-projection, weight-only, before QK norm)
 
   on_step callback → ref.step = step_index + 1
 ```
@@ -189,10 +184,10 @@ FOR each denoising step t (0 … steps-1):
 **The core equation, and where each term comes from:**
 
 ```
-H_ℓ = H_base + Σᵢ αᵢ(t) · (Hᵢ − H_base)
+H_{ℓ,h} = H_{base,h} + Σᵢ αᵢ(ℓ,h,t) · (H_{i,h} − H_{base,h})
 
-αᵢ(t) = α₀        · S[ℓ,a]   · intensityᵢ  · sched(t)    · alpha_scale
-        config.py   basm.py    hedges.py     schedule.py   guard.py
+αᵢ(ℓ,h,t) = α₀        · S[ℓ,h,a]  · intensityᵢ  · sched(t)    · alpha_scale
+            config.py   hasm.py     hedges.py     schedule.py   guard.py
 ```
 
 ### Phase D · Saving the result
