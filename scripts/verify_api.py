@@ -105,6 +105,43 @@ def main() -> int:
         str(block_returns),
     )
 
+    # --- head-level routing depends on all of the following --------------
+    proc_src = "".join(inspect.getsource(JointAttnProcessor2_0.__call__).split())
+
+    # The entire head-masking premise: head h must own the contiguous
+    # output range [h*head_dim, (h+1)*head_dim). If this reshape changes,
+    # masking dimension ranges is no longer masking heads.
+    check(
+        "head reshape gives each head a contiguous dim slice",
+        "view(batch_size,-1,attn.heads,head_dim).transpose(1,2)" in proc_src,
+        "reshape convention changed -- the head-masking premise is INVALID",
+    )
+
+    # patching.install_head_routing wraps exactly these three modules.
+    for name in ("add_q_proj", "add_k_proj", "add_v_proj"):
+        check(f"processor projects text through attn.{name}", f"attn.{name}" in proc_src)
+
+    # head_proj.HeadResidualProj derives head_dim from attn.heads.
+    attn_src = "".join(inspect.getsource(Attention.__init__).split())
+    check("Attention exposes .heads", "self.heads=" in attn_src)
+
+    # install_head_routing wraps block.attn only. A second attention module
+    # would route unrouted -- a gap that predates head-level routing.
+    block_src = "".join(inspect.getsource(JointTransformerBlock.__init__).split())
+    check(
+        "no unhandled second attention (attn2) on JointTransformerBlock",
+        "self.attn2=" not in block_src,
+        "attn2 exists -- install_head_routing must wrap its projections too",
+    )
+
+    # The final block sets context_pre_only=True and may lack add_*_proj;
+    # install_head_routing skips absent modules via getattr(..., None).
+    check(
+        "context_pre_only is a JointTransformerBlock parameter",
+        "context_pre_only"
+        in inspect.signature(JointTransformerBlock.__init__).parameters,
+    )
+
     failed = [name for name, status in CHECKS if status == "FAIL"]
     print()
     if failed:
