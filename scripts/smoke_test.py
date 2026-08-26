@@ -51,7 +51,19 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     cfg = FlairConfig(device="cuda")
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("hf_token")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    )
+    if token:
+        try:
+            from huggingface_hub import login
+            login(token=token, add_to_git_credential=False)
+        except Exception:
+            pass
+
     pipe = StableDiffusion3Pipeline.from_pretrained(
         cfg.model_id,
         torch_dtype=torch.float16,
