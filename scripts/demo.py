@@ -9,6 +9,7 @@ to read. Zip the output directory and hand it over.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = FlairConfig(device="cuda")
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = os.environ.get("hf_token") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     pipe = StableDiffusion3Pipeline.from_pretrained(
         cfg.model_id,
         torch_dtype=torch.float16,
