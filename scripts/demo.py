@@ -9,7 +9,11 @@ to read. Zip the output directory and hand it over.
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import spacy
 import torch

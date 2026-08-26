@@ -18,9 +18,13 @@ are derived from them (master roadmap, section 2).
 """
 
 import argparse
+import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import spacy
 import torch

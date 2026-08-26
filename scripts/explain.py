@@ -28,9 +28,13 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 import zlib
 from dataclasses import asdict
 from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import torch

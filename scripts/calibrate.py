@@ -16,7 +16,11 @@ roadmap section 2.3. Choose --seeds from the budget arithmetic in section
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import spacy
 import torch
