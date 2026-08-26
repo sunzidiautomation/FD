@@ -107,7 +107,9 @@ def describe_plan(plan, guard=None) -> dict[str, Any]:
             "attribute": rc.component.attr.value,
             "text": rc.component.text,
             "hedge": rc.component.hedge,
-            "blocks": [[int(b), float(s)] for b, s in rc.blocks],
+            "units": [
+                [int(u.block), int(u.head), float(s)] for u, s in rc.units
+            ],
             "intensity": float(rc.intensity),
         }
         for rc in plan.routed
@@ -176,7 +178,7 @@ def summarise(out_dir: str | Path) -> str:
 
     lines = [f"{len(records)} run(s) in {out_dir}", ""]
     for r in records:
-        blocks = sorted({b for c in r.get("routed", []) for b, _ in c["blocks"]})
+        blocks = sorted({u[0] for c in r.get("routed", []) for u in c["units"]})
         lines.append(
             f"  {r['run_id']:<26} seed={r['seed']:<3} "
             f"routing={str(r['routing']):<5} blocks={blocks} "

@@ -75,7 +75,7 @@ def test_describe_plan_flattens_to_json_safe_fields():
 
     assert entry["attribute"] == "color"
     assert entry["hedge"] == "very"
-    assert entry["blocks"] == [[7, 0.93], [3, 0.22]]
+    assert entry["units"] == [[7, 0, 0.93], [3, 0, 0.22]]
     assert entry["intensity"] == pytest.approx(1.138)
     json.dumps(described)  # must not raise
 

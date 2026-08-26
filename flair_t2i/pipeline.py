@@ -9,24 +9,32 @@ from __future__ import annotations
 
 import torch
 
-from .basm import BASM
 from .components import Component
 from .config import FlairConfig
 from .fuzzy.resolve import resolve_components
 from .guard import CoherenceGuard
+from .hasm import HASM
 from .latents import LatentRecorder
 from .parsing import parse_prompt
-from .patching import install_flair, uninstall_flair
+from .patching import install_head_routing, uninstall_head_routing
 from .processor import PlanRef
 from .routing import RoutingPlan, build_routing_plan
 
 
 class FlairPipeline:
-    def __init__(self, pipe, cfg: FlairConfig, basm: BASM, nlp=None) -> None:
+    def __init__(
+        self,
+        pipe,
+        cfg: FlairConfig,
+        hasm: HASM,
+        nlp=None,
+        granularity: str = "head",
+    ) -> None:
         self.pipe = pipe
         self.cfg = cfg
-        self.basm = basm
+        self.hasm = hasm
         self.nlp = nlp
+        self.granularity = granularity
         self.last_plan: RoutingPlan | None = None
         self.last_guard: CoherenceGuard | None = None
 
@@ -62,7 +70,7 @@ class FlairPipeline:
 
         if routing:
             components = parse_prompt(prompt, self.nlp)
-            routable = [c for c in components if c.attr in self.basm.attributes]
+            routable = [c for c in components if c.attr in self.hasm.attributes]
             embeddings = self.encode_components(routable)
 
             if fuzzy:
@@ -71,7 +79,13 @@ class FlairPipeline:
                 intensities, k_overrides = {}, {}
 
             plan = build_routing_plan(
-                routable, embeddings, self.basm, self.cfg, intensities, k_overrides
+                routable,
+                embeddings,
+                self.hasm,
+                self.cfg,
+                intensities,
+                k_overrides,
+                granularity=self.granularity,
             )
             if plan.routed:
                 ref.plan = plan
@@ -79,7 +93,7 @@ class FlairPipeline:
                 self.last_guard = CoherenceGuard(self.cfg)
                 self.last_guard.apply(plan, self.last_guard.check_streams(plan, step=0))
 
-        handles = install_flair(self.pipe.transformer, ref)
+        handles = install_head_routing(self.pipe.transformer, ref)
         try:
 
             def on_step(pipe, step_index, timestep, callback_kwargs):
@@ -96,6 +110,6 @@ class FlairPipeline:
                 callback_on_step_end=on_step,
             )
         finally:
-            uninstall_flair(handles)
+            uninstall_head_routing(handles)
 
         return result.images[0]
