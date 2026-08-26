@@ -1240,8 +1240,7 @@ test_processor.py is left red here; Task 7 retires FlairJointProcessor."
 **Interfaces:**
 - Consumes: `PlanRef` (existing `processor.py`), `RoutingPlan` (Task 5).
 - Produces:
-  - `HeadResidualProj(inner: torch.nn.Linear, block_id: int, ref: PlanRef)` — an `nn.Module` with `.forward(x)`; derives `n_heads` and `head_dim` from the wrapped module and the owning attention at construction time via explicit arguments `n_heads`, `head_dim`.
-  - Full signature: `HeadResidualProj(inner, block_id, ref, n_heads, head_dim)`
+  - `HeadResidualProj(inner, block_id, ref, n_heads, head_dim)` — an `nn.Module` with `.forward(x)`. It **derives nothing**: `n_heads` and `head_dim` are plain constructor arguments, stored as given. Task 7's `install_head_routing` is what computes them, from `attn.heads` and `inner.out_features // n_heads`, and passes them in.
 
 - [ ] **Step 1: Write the failing test**
 
