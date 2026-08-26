@@ -1,0 +1,104 @@
+{
+  "run_id": "explain_a-small-red-sports-car-under-warm-evenin_0d20aefe",
+  "prompt": "A small red sports car under warm evening light",
+  "seed": -1,
+  "steps": 20,
+  "guidance_scale": 0.0,
+  "routing": true,
+  "fuzzy": true,
+  "basm_source": "SYNTHETIC placeholder (real one arrives in Week 3-4)",
+  "config": {
+    "device": "cpu",
+    "alpha_0": 0.75,
+    "t_window": [
+      0.0,
+      0.6
+    ],
+    "top_k_default": 1,
+    "guard_cos_threshold": 0.55,
+    "guard_membership_threshold": 0.5,
+    "guard_backoff": 0.5,
+    "model_id": "stabilityai/stable-diffusion-3.5-medium",
+    "max_sequence_length": 256
+  },
+  "routed": [
+    {
+      "id": "c_identity",
+      "attribute": "identity",
+      "text": "sports car",
+      "hedge": null,
+      "units": [
+        [
+          3,
+          0,
+          0.8666810751587214
+        ]
+      ],
+      "intensity": 1.0
+    },
+    {
+      "id": "c_color",
+      "attribute": "color",
+      "text": "red sports car",
+      "hedge": null,
+      "units": [
+        [
+          9,
+          1,
+          0.9499335873487742
+        ]
+      ],
+      "intensity": 1.0
+    },
+    {
+      "id": "c_size",
+      "attribute": "size",
+      "text": "small sports car",
+      "hedge": null,
+      "units": [
+        [
+          15,
+          2,
+          0.9000456541833893
+        ]
+      ],
+      "intensity": 1.0
+    },
+    {
+      "id": "c_lighting",
+      "attribute": "lighting",
+      "text": "warm evening light",
+      "hedge": null,
+      "units": [
+        [
+          21,
+          3,
+          0.8914544372928243
+        ]
+      ],
+      "intensity": 1.0
+    }
+  ],
+  "guard_events": [
+    {
+      "step": 0,
+      "reason": "cross_stream_similarity",
+      "value": -0.09625712037086487
+    }
+  ],
+  "alpha_scale": 0.5,
+  "tag": "explain",
+  "notes": "routing decisions only -- no image, CPU dry run",
+  "timestamp": "2026-08-26T16:48:54+00:00",
+  "git_commit": "unknown",
+  "versions": {
+    "python": "3.12.14",
+    "torch": "2.13.0+cpu",
+    "diffusers": "absent",
+    "transformers": "absent",
+    "spacy": "3.8.16",
+    "scikit-fuzzy": "0.5.0",
+    "numpy": "2.5.2"
+  },
+  "image": null
+}
