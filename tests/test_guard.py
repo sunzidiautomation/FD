@@ -6,6 +6,7 @@ from flair_t2i.attributes import AttributeClass
 from flair_t2i.components import Component
 from flair_t2i.config import FlairConfig
 from flair_t2i.guard import CoherenceGuard
+from flair_t2i.heads import HeadUnit
 from flair_t2i.routing import RoutedComponent, RoutingPlan
 
 SEQ, DIM = 4, 8
@@ -17,7 +18,7 @@ def _plan(*embeddings):
         RoutedComponent(
             component=Component(id=f"c{i}", text="x", attr=AttributeClass.COLOR),
             embedding=e,
-            blocks=((7, 1.0),),
+            units=((HeadUnit(7, 0), 1.0),),
         )
         for i, e in enumerate(embeddings)
     )

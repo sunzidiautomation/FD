@@ -17,6 +17,7 @@ from flair_t2i.attributes import AttributeClass
 from flair_t2i.components import Component
 from flair_t2i.config import FlairConfig
 from flair_t2i.guard import CoherenceGuard, GuardEvent
+from flair_t2i.heads import HeadUnit
 from flair_t2i.routing import RoutedComponent, RoutingPlan
 
 CFG = FlairConfig(device="cpu")
@@ -47,7 +48,7 @@ def _plan():
                     hedge="very",
                 ),
                 embedding=torch.ones((2, 2)),
-                blocks=((7, 0.93), (3, 0.22)),
+                units=((HeadUnit(7, 0), 0.93), (HeadUnit(3, 0), 0.22)),
                 intensity=1.138,
             ),
         ),

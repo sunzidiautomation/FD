@@ -5,20 +5,22 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("skfuzzy")
 
 from flair_t2i.attributes import AttributeClass
-from flair_t2i.basm import BASM
 from flair_t2i.components import Component
 from flair_t2i.config import FlairConfig
 from flair_t2i.fuzzy.resolve import resolve_components
+from flair_t2i.hasm import HASM
+from flair_t2i.heads import HeadUnit
 from flair_t2i.routing import build_routing_plan
 
 SEQ, DIM = 4, 8
 CFG = FlairConfig(alpha_0=1.0, t_window=(0.0, 1.0), top_k_default=1)
 
 
-def _basm():
-    return BASM(
-        matrix=np.array([[0.4], [0.9], [0.6]]),
+def _hasm():
+    return HASM(
+        tensor=np.array([[[0.4]], [[0.9]], [[0.6]]]),
         block_ids=(3, 7, 11),
+        head_ids=(0,),
         attributes=(AttributeClass.SIZE,),
     )
 
@@ -53,25 +55,25 @@ def test_hedge_flows_through_to_routed_blocks():
     embeddings = {"c_size": torch.zeros((SEQ, DIM))}
 
     plan = build_routing_plan(
-        components, embeddings, _basm(), CFG, intensities, k_overrides
+        components, embeddings, _hasm(), CFG, intensities, k_overrides
     )
 
-    assert len(plan.routed[0].blocks) >= 2  # widened by dilation
+    assert len(plan.routed[0].units) >= 2  # widened by dilation
     assert plan.routed[0].intensity < 1.0
 
 
 def test_hedge_changes_the_resulting_alpha():
     embeddings = {"c_size": torch.zeros((SEQ, DIM))}
 
-    plain = build_routing_plan([_component(None)], embeddings, _basm(), CFG)
+    plain = build_routing_plan([_component(None)], embeddings, _hasm(), CFG)
     hedged_components = [_component("very")]
     intensities, k_overrides, _ = resolve_components(hedged_components)
     hedged = build_routing_plan(
-        hedged_components, embeddings, _basm(), CFG, intensities, k_overrides
+        hedged_components, embeddings, _hasm(), CFG, intensities, k_overrides
     )
 
-    a_plain = plain.alpha(plain.routed[0], 7, 0.0)
-    a_hedged = hedged.alpha(hedged.routed[0], 7, 0.0)
+    a_plain = plain.alpha(plain.routed[0], HeadUnit(7, 0), 0.0)
+    a_hedged = hedged.alpha(hedged.routed[0], HeadUnit(7, 0), 0.0)
     assert a_hedged > a_plain
 
 
@@ -83,7 +85,7 @@ def test_uncalibrated_attribute_is_still_skipped():
     plan = build_routing_plan(
         components,
         {"c_style": torch.zeros((SEQ, DIM))},
-        _basm(),
+        _hasm(),
         CFG,
         intensities,
         k_overrides,

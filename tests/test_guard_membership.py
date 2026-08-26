@@ -28,6 +28,7 @@ def test_membership_event_backs_off_alpha_like_the_cosine_check():
     import torch
 
     from flair_t2i.components import Component
+    from flair_t2i.heads import HeadUnit
     from flair_t2i.routing import RoutedComponent, RoutingPlan
 
     plan = RoutingPlan(
@@ -35,7 +36,7 @@ def test_membership_event_backs_off_alpha_like_the_cosine_check():
             RoutedComponent(
                 component=Component(id="c", text="x", attr=AttributeClass.SIZE),
                 embedding=torch.ones((2, 2)),
-                blocks=((7, 1.0),),
+                units=((HeadUnit(7, 0), 1.0),),
             ),
         ),
         cfg=CFG,

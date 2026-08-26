@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from flair_t2i.attributes import AttributeClass
 from flair_t2i.components import Component
 from flair_t2i.config import FlairConfig
+from flair_t2i.heads import HeadUnit
 from flair_t2i.processor import FlairJointProcessor, PlanRef
 from flair_t2i.routing import RoutedComponent, RoutingPlan
 
@@ -23,11 +24,11 @@ class RecordingProcessor:
         return hidden_states, encoder_hidden_states
 
 
-def _ref(block_blocks=((7, 1.0),), total_steps=10, step=0):
+def _ref(block_units=((HeadUnit(7, 0), 1.0),), total_steps=10, step=0):
     routed = RoutedComponent(
         component=Component(id="c_color", text="a red car", attr=AttributeClass.COLOR),
         embedding=torch.ones((SEQ, DIM)),
-        blocks=block_blocks,
+        units=block_units,
     )
     return PlanRef(
         plan=RoutingPlan(routed=(routed,), cfg=CFG),
