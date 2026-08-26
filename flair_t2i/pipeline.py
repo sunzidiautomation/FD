@@ -14,6 +14,7 @@ from .components import Component
 from .config import FlairConfig
 from .fuzzy.resolve import resolve_components
 from .guard import CoherenceGuard
+from .latents import LatentRecorder
 from .parsing import parse_prompt
 from .patching import install_flair, uninstall_flair
 from .processor import PlanRef
@@ -52,6 +53,7 @@ class FlairPipeline:
         guidance_scale: float = 4.5,
         routing: bool = True,
         fuzzy: bool = True,
+        recorder: LatentRecorder | None = None,
     ):
         self.last_plan = None
         self.last_guard = None
@@ -82,6 +84,8 @@ class FlairPipeline:
 
             def on_step(pipe, step_index, timestep, callback_kwargs):
                 ref.step = step_index
+                if recorder is not None and "latents" in callback_kwargs:
+                    recorder(step_index, steps, callback_kwargs["latents"])
                 return callback_kwargs
 
             result = self.pipe(
