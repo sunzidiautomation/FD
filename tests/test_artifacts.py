@@ -63,9 +63,13 @@ def test_record_fills_provenance_automatically():
     assert "python" in record.versions
 
 
-def test_package_versions_marks_missing_packages_absent():
+def test_package_versions_marks_missing_packages_absent(monkeypatch):
+    monkeypatch.setattr(
+        "flair_t2i.artifacts._VERSION_PACKAGES",
+        ("torch", "nonexistent_package_xyz"),
+    )
     versions = package_versions()
-    assert versions["diffusers"] == "absent"  # not in the CPU test image
+    assert versions["nonexistent_package_xyz"] == "absent"
     assert versions["torch"] != "absent"
 
 

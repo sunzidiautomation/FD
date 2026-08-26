@@ -25,25 +25,30 @@ def install_head_routing(transformer, ref: PlanRef) -> list[tuple]:
     handles: list[tuple] = []
 
     for block_id, block in enumerate(transformer.transformer_blocks):
-        attn = block.attn
-        n_heads = attn.heads
+        for attn_name in ("attn", "attn2"):
+            attn = getattr(block, attn_name, None)
+            if attn is None:
+                continue
+            n_heads = getattr(attn, "heads", None)
+            if n_heads is None:
+                continue
 
-        for name in TEXT_PROJECTIONS:
-            inner = getattr(attn, name, None)
-            if inner is None:
-                continue  # final block: context_pre_only=True
-            setattr(
-                attn,
-                name,
-                HeadResidualProj(
-                    inner,
-                    block_id=block_id,
-                    ref=ref,
-                    n_heads=n_heads,
-                    head_dim=inner.out_features // n_heads,
-                ),
-            )
-            handles.append((attn, name, inner))
+            for name in TEXT_PROJECTIONS:
+                inner = getattr(attn, name, None)
+                if inner is None:
+                    continue  # final block: context_pre_only=True
+                setattr(
+                    attn,
+                    name,
+                    HeadResidualProj(
+                        inner,
+                        block_id=block_id,
+                        ref=ref,
+                        n_heads=n_heads,
+                        head_dim=inner.out_features // n_heads,
+                    ),
+                )
+                handles.append((attn, name, inner))
 
     return handles
 

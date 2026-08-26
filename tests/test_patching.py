@@ -95,3 +95,21 @@ def test_bypass_blocks_still_restores_forward():
     with bypass_blocks(transformer, {1}):
         assert transformer.transformer_blocks[1].forward is not original
     assert transformer.transformer_blocks[1].forward is original
+
+
+def test_install_wraps_attn2_if_present():
+    transformer = StubTransformer()
+    for block in transformer.transformer_blocks:
+        block.attn2 = StubAttn()
+
+    handles = install_head_routing(transformer, PlanRef())
+    for block in transformer.transformer_blocks:
+        for name in PROJECTIONS:
+            assert isinstance(getattr(block.attn, name), HeadResidualProj)
+            assert isinstance(getattr(block.attn2, name), HeadResidualProj)
+
+    uninstall_head_routing(handles)
+    for block in transformer.transformer_blocks:
+        for name in PROJECTIONS:
+            assert not isinstance(getattr(block.attn, name), HeadResidualProj)
+            assert not isinstance(getattr(block.attn2, name), HeadResidualProj)

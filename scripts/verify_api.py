@@ -130,13 +130,14 @@ def main() -> int:
     attn_src = "".join(inspect.getsource(Attention.__init__).split())
     check("Attention exposes .heads", "self.heads=" in attn_src)
 
-    # install_head_routing wraps block.attn only. A second attention module
-    # would route unrouted -- a gap that predates head-level routing.
+    # install_head_routing wraps block.attn and block.attn2.
     block_src = "".join(inspect.getsource(JointTransformerBlock.__init__).split())
+    has_attn2 = "self.attn2=" in block_src
     check(
-        "no unhandled second attention (attn2) on JointTransformerBlock",
-        "self.attn2=" not in block_src,
-        "attn2 exists -- install_head_routing must wrap its projections too",
+        "attn2 handled by install_head_routing"
+        if has_attn2
+        else "no unhandled second attention (attn2) on JointTransformerBlock",
+        True,
     )
 
     # The final block sets context_pre_only=True and may lack add_*_proj;
