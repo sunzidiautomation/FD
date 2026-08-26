@@ -50,6 +50,15 @@ PREFILTER_PROMPTS = [
 
 
 def _pipeline(cfg: FlairConfig) -> FlairPipeline:
+    # Load .env if present
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
     token = (
         os.environ.get("HF_TOKEN")
         or os.environ.get("hf_token")

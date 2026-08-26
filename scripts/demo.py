@@ -42,6 +42,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Load .env if present
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
     cfg = FlairConfig(device="cuda")
     token = (
         os.environ.get("HF_TOKEN")
