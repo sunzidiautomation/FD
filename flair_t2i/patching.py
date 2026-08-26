@@ -1,31 +1,56 @@
-"""Install FLAIR processors onto an SD3.5 transformer, and bypass blocks.
+"""Install FLAIR's head-routing wrappers on an SD3.5 transformer, and
+bypass blocks.
 
-``bypass_blocks`` implements the residual bypass the vital-layer prefilter
-needs (spec section 3.4): the block is skipped and its input passes through
-unchanged.
+Routing is applied by wrapping the text stream's Q/K/V projections rather
+than by replacing an attention processor -- see ``head_proj.py`` for why.
+``bypass_blocks`` is unrelated to routing: it implements the residual
+bypass the vital-layer prefilter needs (spec section 3.4).
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 
-from .processor import FlairJointProcessor, PlanRef
+from .head_proj import HeadResidualProj
+from .processor import PlanRef
+
+#: The text stream's projections. Modifying their inputs is what
+#: block-level routing used to do; wrapping their outputs is how head-level
+#: routing does it.
+TEXT_PROJECTIONS = ("add_q_proj", "add_k_proj", "add_v_proj")
 
 
-def install_flair(transformer, ref: PlanRef) -> list[tuple]:
-    """Wrap every joint attention processor. Returns handles for removal."""
-    handles = []
+def install_head_routing(transformer, ref: PlanRef) -> list[tuple]:
+    """Wrap every text-stream projection. Returns handles for removal."""
+    handles: list[tuple] = []
+
     for block_id, block in enumerate(transformer.transformer_blocks):
         attn = block.attn
-        original = attn.get_processor()
-        attn.set_processor(FlairJointProcessor(original, block_id=block_id, ref=ref))
-        handles.append((attn, original))
+        n_heads = attn.heads
+
+        for name in TEXT_PROJECTIONS:
+            inner = getattr(attn, name, None)
+            if inner is None:
+                continue  # final block: context_pre_only=True
+            setattr(
+                attn,
+                name,
+                HeadResidualProj(
+                    inner,
+                    block_id=block_id,
+                    ref=ref,
+                    n_heads=n_heads,
+                    head_dim=inner.out_features // n_heads,
+                ),
+            )
+            handles.append((attn, name, inner))
+
     return handles
 
 
-def uninstall_flair(handles: list[tuple]) -> None:
-    for attn, original in handles:
-        attn.set_processor(original)
+def uninstall_head_routing(handles: list[tuple]) -> None:
+    for attn, name, inner in handles:
+        setattr(attn, name, inner)
 
 
 @contextmanager
