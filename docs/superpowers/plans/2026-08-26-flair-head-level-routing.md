@@ -1747,7 +1747,9 @@ class StubAttn:
         self.add_v_proj = torch.nn.Linear(DIM, DIM)
 ```
 
-and delete `get_processor` / `set_processor`, which nothing calls any more.
+and delete `get_processor` / `set_processor` from the stub.
+
+**One existing test does still call them**, which this step contradicts: `test_generate_restores_original_processors` asserts the processors are restored after generation. That teardown check is still worth having — rework it as `test_generate_restores_original_projections`, asserting the three `add_*_proj` attributes are the original `Linear`s again after `generate` returns. Same guarantee, new install mechanism.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -1840,7 +1842,13 @@ to:
     assert entry["units"] == [[7, 0, 0.93], [3, 0, 0.22]]
 ```
 
-Three `tests/test_artifacts.py` tests are red coming into this task (they broke in Task 5 when `rc.blocks` was removed); this edit plus the `artifacts.py` change is what makes them green again.
+**`artifacts.py` has a SECOND stale reference the line-110 edit misses.** `summarise` (around line 181) does `for b, _ in c["blocks"]`, so renaming only the emitting site leaves `test_summarise_reports_each_run` failing with a `KeyError`. Change it to read the new triples while preserving the `blocks=[3, 7]` output the test asserts:
+
+```python
+        blocks = sorted({u[0] for c in record["plan"]["routed"] for u in c["units"]})
+```
+
+Three `tests/test_artifacts.py` tests are red coming into this task (they broke in Task 5 when `rc.blocks` was removed); the two `artifacts.py` edits plus the assertion change are what make them green again.
 
 In `scripts/explain.py`, import `from flair_t2i.hasm import HASM` (replacing the `BASM` import) and replace the `synthetic_basm` helper (lines 50-63) with:
 
