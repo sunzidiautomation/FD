@@ -6,3 +6,5 @@ venv/
 *.egg-info/
 *.safetensors
 *.ckpt
+.env
+*.env
