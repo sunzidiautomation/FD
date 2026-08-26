@@ -1,18 +1,19 @@
-"""BASM calibration harness (spec section 3.4).
+"""HASM calibration harness (spec section 3.4).
 
-For each attribute a, each vital block l, and each contrastive pair p:
-run the base prompt everywhere, then run it again with p.changed swapped in
-at block l alone, and measure the attribute-specific change inside the
-object mask. Averaging over pairs gives a raw sensitivity, and min-max
-normalising each attribute's column gives S[l, a] in [0, 1].
+For each attribute a, each routable head unit (l, h), and each contrastive
+pair p: run the base prompt everywhere, then run it again with p.changed
+swapped in at that head alone, and measure the attribute-specific change
+inside the object mask. Averaging over pairs gives a raw sensitivity, and
+min-max normalising each attribute's whole plane gives S[l, h, a] in
+[0, 1].
 
 Checkpointing is not optional in practice. A full sweep is
-``attributes x pairs x seeds x (1 + blocks)`` generations -- upwards of a
-thousand -- which can outlast a Kaggle session's 12-hour cap. Each
-(attribute, block) cell is written to disk as it completes and skipped on
-resume, so an interrupted campaign continues instead of starting over.
-Cells store the RAW mean, not the normalised score, because normalisation
-depends on the whole column.
+``attributes x pairs x seeds x (1 + blocks x heads)`` generations -- far
+more than a thousand -- which can outlast a Kaggle session's 12-hour cap.
+Each (attribute, block, head) cell is written to disk as it completes and
+skipped on resume, so an interrupted campaign continues instead of
+starting over. Cells store the RAW mean, not the normalised score, because
+normalisation depends on the whole plane.
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ import numpy as np
 from PIL import Image
 
 from ..attributes import AttributeClass
-from ..basm import BASM
+from ..hasm import HASM
+from ..heads import HeadUnit
 from ..metrics.embedding import ImageTextScorer
 from ..metrics.masking import Masker
 from ..metrics.photometric import size_delta
@@ -36,7 +38,7 @@ from .corpus import ContrastivePair
 
 @dataclass(frozen=True)
 class SwapSpec:
-    block_id: int
+    unit: HeadUnit
     prompt: str
 
 
@@ -46,11 +48,20 @@ class SwapGenerateFn(Protocol):
     ) -> Image.Image: ...
 
 
-ProgressFn = Callable[[AttributeClass, int, float], None]
+ProgressFn = Callable[[AttributeClass, HeadUnit, float], None]
+PairFn = Callable[
+    [AttributeClass, HeadUnit, ContrastivePair, int, Image.Image, Image.Image], None
+]
 
 
-def _cell_path(checkpoint_dir: str | Path, attr: AttributeClass, block_id: int) -> Path:
-    return Path(checkpoint_dir) / "cells" / f"{attr.value}_{block_id}.json"
+def _cell_path(
+    checkpoint_dir: str | Path, attr: AttributeClass, unit: HeadUnit
+) -> Path:
+    return (
+        Path(checkpoint_dir)
+        / "cells"
+        / f"{attr.value}_{unit.block}_{unit.head}.json"
+    )
 
 
 def _load_cell(path: Path) -> float | None:
@@ -62,14 +73,15 @@ def _load_cell(path: Path) -> float | None:
 
 
 def _save_cell(
-    path: Path, attr: AttributeClass, block_id: int, raw: float, samples: int
+    path: Path, attr: AttributeClass, unit: HeadUnit, raw: float, samples: int
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "attribute": attr.value,
-                "block": block_id,
+                "block": unit.block,
+                "head": unit.head,
                 "raw": raw,
                 "samples": samples,
             }
@@ -89,13 +101,14 @@ def _normalise(column: np.ndarray) -> np.ndarray:
 def _measure_cell(
     generate_fn: SwapGenerateFn,
     attr: AttributeClass,
-    block_id: int,
+    unit: HeadUnit,
     pairs: list[ContrastivePair],
     seeds: list[int],
     masker: Masker,
     scorer: ImageTextScorer | None,
+    on_pair: PairFn | None = None,
 ) -> tuple[float, int]:
-    """Mean attribute change for one (attribute, block), over every pair."""
+    """Mean attribute change for one (attribute, head unit), over every pair."""
     deltas: list[float] = []
 
     for pair in pairs:
@@ -105,8 +118,10 @@ def _measure_cell(
             swapped = generate_fn(
                 prompt=pair.base,
                 seed=seed,
-                swap=SwapSpec(block_id=block_id, prompt=pair.changed),
+                swap=SwapSpec(unit=unit, prompt=pair.changed),
             )
+            if on_pair is not None:
+                on_pair(attr, unit, pair, seed, baseline, swapped)
             mask = masker(baseline, pair.object_label)
 
             if attr is AttributeClass.SIZE:
@@ -126,65 +141,84 @@ def _measure_cell(
 def calibrate(
     generate_fn: SwapGenerateFn,
     corpus: dict[AttributeClass, list[ContrastivePair]],
-    vital_blocks: tuple[int, ...],
+    block_ids: tuple[int, ...],
+    head_ids: tuple[int, ...],
     masker: Masker,
     seeds: list[int],
     scorer: ImageTextScorer | None = None,
     progress: ProgressFn | None = None,
     checkpoint_dir: str | Path | None = None,
-) -> BASM:
-    """Measure per-block sensitivity for every attribute in ``corpus``.
+    on_pair: PairFn | None = None,
+) -> HASM:
+    """Measure per-head sensitivity for every attribute in ``corpus``.
 
-    Pass ``checkpoint_dir`` to make the sweep resumable.
+    Pass ``checkpoint_dir`` to make the sweep resumable. At
+    ``blocks x heads x attributes`` cells this is not optional in practice.
     """
     attributes = tuple(a for a in AttributeClass if a in corpus)
-    raw = np.zeros((len(vital_blocks), len(attributes)))
+    raw = np.zeros((len(block_ids), len(head_ids), len(attributes)))
 
-    for col, attr in enumerate(attributes):
-        for row, block_id in enumerate(vital_blocks):
-            cached = (
-                _load_cell(_cell_path(checkpoint_dir, attr, block_id))
-                if checkpoint_dir is not None
-                else None
-            )
-
-            if cached is not None:
-                raw[row, col] = cached
-            else:
-                value, samples = _measure_cell(
-                    generate_fn, attr, block_id, corpus[attr], seeds, masker, scorer
+    for plane, attr in enumerate(attributes):
+        for i, block_id in enumerate(block_ids):
+            for j, head_id in enumerate(head_ids):
+                unit = HeadUnit(block=block_id, head=head_id)
+                cached = (
+                    _load_cell(_cell_path(checkpoint_dir, attr, unit))
+                    if checkpoint_dir is not None
+                    else None
                 )
-                raw[row, col] = value
-                if checkpoint_dir is not None:
-                    _save_cell(
-                        _cell_path(checkpoint_dir, attr, block_id),
+
+                if cached is not None:
+                    raw[i, j, plane] = cached
+                else:
+                    value, samples = _measure_cell(
+                        generate_fn,
                         attr,
-                        block_id,
-                        value,
-                        samples,
+                        unit,
+                        corpus[attr],
+                        seeds,
+                        masker,
+                        scorer,
+                        on_pair=on_pair,
                     )
+                    raw[i, j, plane] = value
+                    if checkpoint_dir is not None:
+                        _save_cell(
+                            _cell_path(checkpoint_dir, attr, unit),
+                            attr,
+                            unit,
+                            value,
+                            samples,
+                        )
 
-            if progress is not None:
-                progress(attr, block_id, raw[row, col])
+                if progress is not None:
+                    progress(attr, unit, raw[i, j, plane])
 
-        raw[:, col] = _normalise(raw[:, col])
+        # Normalise across every unit for this attribute, not per block.
+        raw[:, :, plane] = _normalise(raw[:, :, plane])
 
-    return BASM(matrix=raw, block_ids=vital_blocks, attributes=attributes)
+    return HASM(
+        tensor=raw,
+        block_ids=block_ids,
+        head_ids=head_ids,
+        attributes=attributes,
+    )
 
 
 def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
     """Bind a FlairPipeline into the harness's generate signature.
 
-    A swap is the routing blend at full strength: with alpha = 1.0 at one
-    block, H = H_base + 1.0 * (H_changed - H_base) = H_changed exactly. So
-    calibration reuses the routing machinery instead of adding a second
-    injection path that could drift from it.
+    A swap is the routing residual at full strength: with alpha = 1.0 on one
+    head, that head's Q/K/V become exactly what they would be under
+    H_changed, and every other head is untouched. Calibration therefore
+    reuses the routing machinery instead of adding a second injection path
+    that could drift from it.
     """
     import torch
 
     from ..components import Component
     from ..config import FlairConfig
-    from ..patching import install_flair, uninstall_flair
+    from ..patching import install_head_routing, uninstall_head_routing
     from ..processor import PlanRef
     from ..routing import RoutedComponent, RoutingPlan
 
@@ -211,14 +245,14 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
                 RoutedComponent(
                     component=component,
                     embedding=embeddings["swap"],
-                    blocks=((swap.block_id, 1.0),),
+                    units=((swap.unit, 1.0),),
                 ),
             ),
             cfg=swap_cfg,
         )
 
         ref = PlanRef(plan=plan, total_steps=steps, do_cfg=True)
-        handles = install_flair(flair_pipeline.pipe.transformer, ref)
+        handles = install_head_routing(flair_pipeline.pipe.transformer, ref)
         try:
 
             def on_step(pipe, step_index, timestep, callback_kwargs):
@@ -233,8 +267,10 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
                 callback_on_step_end=on_step,
             )
         finally:
-            uninstall_flair(handles)
+            uninstall_head_routing(handles)
 
         return result.images[0]
+
+    return generate
 
     return generate

@@ -7,12 +7,14 @@ from PIL import Image
 from flair_t2i.attributes import AttributeClass
 from flair_t2i.calibration.corpus import ContrastivePair
 from flair_t2i.calibration.harness import SwapSpec, calibrate
+from flair_t2i.heads import HeadUnit
 from flair_t2i.metrics.masking import RectMasker
 
-VITAL = (0, 1, 2)
+BLOCK_IDS = (0, 1, 2)
+HEAD_IDS = (0, 1)
 SEEDS = [0]
-#: The fake model routes the attribute through block 1 and nothing else.
-LIVE_BLOCK = 1
+#: The fake model routes the attribute through exactly one head.
+LIVE_UNIT = HeadUnit(block=1, head=1)
 
 FULL_MASKER = RectMasker((0.0, 0.0, 1.0, 1.0))
 
@@ -28,8 +30,8 @@ def _corpus(attr=AttributeClass.COLOR, phrase=None):
 
 
 def fake_generate(prompt: str, seed: int, swap: SwapSpec | None) -> Image.Image:
-    """Only a swap at LIVE_BLOCK actually changes the image."""
-    if swap is not None and swap.block_id == LIVE_BLOCK and "blue" in swap.prompt:
+    """Only a swap at LIVE_UNIT actually changes the image."""
+    if swap is not None and swap.unit == LIVE_UNIT and "blue" in swap.prompt:
         return Image.new("RGB", (64, 64), (30, 30, 220))
     return Image.new("RGB", (64, 64), (220, 30, 30))
 
@@ -48,7 +50,8 @@ class FakeScorer:
 def _calibrate(**kw):
     kw.setdefault("generate_fn", fake_generate)
     kw.setdefault("corpus", _corpus())
-    kw.setdefault("vital_blocks", VITAL)
+    kw.setdefault("block_ids", BLOCK_IDS)
+    kw.setdefault("head_ids", HEAD_IDS)
     kw.setdefault("masker", FULL_MASKER)
     kw.setdefault("seeds", SEEDS)
     return calibrate(**kw)
@@ -58,45 +61,48 @@ def _calibrate(**kw):
 
 
 def test_calibrate_returns_a_basm_over_the_vital_blocks():
-    basm = _calibrate()
-    assert basm.block_ids == VITAL
-    assert basm.attributes == (AttributeClass.COLOR,)
+    hasm = _calibrate()
+    assert hasm.block_ids == BLOCK_IDS
+    assert hasm.head_ids == HEAD_IDS
+    assert hasm.attributes == (AttributeClass.COLOR,)
 
 
 def test_the_sensitive_block_scores_highest():
-    basm = _calibrate()
-    assert basm.top_k(AttributeClass.COLOR, 1) == [(LIVE_BLOCK, pytest.approx(1.0))]
+    hasm = _calibrate()
+    assert hasm.top_k(AttributeClass.COLOR, 1) == [(LIVE_UNIT, pytest.approx(1.0))]
 
 
 def test_insensitive_blocks_score_zero_after_normalisation():
-    basm = _calibrate()
-    assert basm.score(0, AttributeClass.COLOR) == pytest.approx(0.0)
-    assert basm.score(2, AttributeClass.COLOR) == pytest.approx(0.0)
+    hasm = _calibrate()
+    assert hasm.score(HeadUnit(0, 0), AttributeClass.COLOR) == pytest.approx(0.0)
+    assert hasm.score(HeadUnit(2, 0), AttributeClass.COLOR) == pytest.approx(0.0)
 
 
 def test_all_scores_land_in_the_unit_interval():
-    basm = _calibrate()
-    assert basm.matrix.min() >= 0.0 and basm.matrix.max() <= 1.0
+    hasm = _calibrate()
+    assert hasm.tensor.min() >= 0.0 and hasm.tensor.max() <= 1.0
 
 
 def test_a_flat_response_normalises_to_zero_rather_than_dividing_by_zero():
     flat = lambda prompt, seed, swap: Image.new("RGB", (64, 64), (128, 128, 128))
-    basm = _calibrate(generate_fn=flat)
-    assert basm.matrix.max() == pytest.approx(0.0)
+    hasm = _calibrate(generate_fn=flat)
+    assert hasm.tensor.max() == pytest.approx(0.0)
 
 
 def test_progress_callback_reports_every_attribute_block_pair():
     seen = []
-    _calibrate(progress=lambda attr, block, value: seen.append((attr, block)))
-    assert seen == [(AttributeClass.COLOR, b) for b in VITAL]
+    _calibrate(progress=lambda attr, unit, value: seen.append((attr, unit)))
+    assert seen == [
+        (AttributeClass.COLOR, HeadUnit(b, h)) for b in BLOCK_IDS for h in HEAD_IDS
+    ]
 
 
 def test_action_attribute_binds_its_phrase():
-    basm = _calibrate(
+    hasm = _calibrate(
         corpus=_corpus(AttributeClass.ACTION, phrase="a car driving"),
         scorer=FakeScorer(),
     )
-    assert basm.attributes == (AttributeClass.ACTION,)
+    assert hasm.attributes == (AttributeClass.ACTION,)
 
 
 class GrowMasker:
@@ -111,9 +117,9 @@ class GrowMasker:
 
 def test_size_remasks_the_swapped_image():
     """Bound to one shared mask, size always reads 0 -- see registry.py."""
-    basm = _calibrate(corpus=_corpus(AttributeClass.SIZE), masker=GrowMasker())
-    assert basm.score(LIVE_BLOCK, AttributeClass.SIZE) == pytest.approx(1.0)
-    assert basm.score(0, AttributeClass.SIZE) == pytest.approx(0.0)
+    hasm = _calibrate(corpus=_corpus(AttributeClass.SIZE), masker=GrowMasker())
+    assert hasm.score(LIVE_UNIT, AttributeClass.SIZE) == pytest.approx(1.0)
+    assert hasm.score(HeadUnit(0, 0), AttributeClass.SIZE) == pytest.approx(0.0)
 
 
 # ------------------------------------------------------------ checkpointing
@@ -130,7 +136,8 @@ def _counting_generate(counter):
 def test_checkpoint_writes_one_file_per_cell(tmp_path):
     _calibrate(checkpoint_dir=tmp_path)
     cells = sorted(p.name for p in (tmp_path / "cells").glob("*.json"))
-    assert cells == ["color_0.json", "color_1.json", "color_2.json"]
+    expected = sorted(f"color_{b}_{h}.json" for b in BLOCK_IDS for h in HEAD_IDS)
+    assert cells == expected
 
 
 def test_resuming_does_not_regenerate_completed_cells(tmp_path):
@@ -146,12 +153,12 @@ def test_resuming_does_not_regenerate_completed_cells(tmp_path):
 def test_a_resumed_run_produces_the_same_matrix(tmp_path):
     original = _calibrate(checkpoint_dir=tmp_path)
     resumed = _calibrate(checkpoint_dir=tmp_path)
-    np.testing.assert_allclose(resumed.matrix, original.matrix)
+    np.testing.assert_allclose(resumed.tensor, original.tensor)
 
 
 def test_a_partial_checkpoint_only_recomputes_missing_cells(tmp_path):
     _calibrate(checkpoint_dir=tmp_path)
-    (tmp_path / "cells" / f"color_{LIVE_BLOCK}.json").unlink()
+    (tmp_path / "cells" / f"color_{LIVE_UNIT.block}_{LIVE_UNIT.head}.json").unlink()
 
     counter = {"calls": 0}
     resumed = _calibrate(
@@ -160,12 +167,12 @@ def test_a_partial_checkpoint_only_recomputes_missing_cells(tmp_path):
 
     # two pairs x one seed x (baseline + swap) for the one missing cell
     assert counter["calls"] == 4
-    assert resumed.top_k(AttributeClass.COLOR, 1) == [(LIVE_BLOCK, pytest.approx(1.0))]
+    assert resumed.top_k(AttributeClass.COLOR, 1) == [(LIVE_UNIT, pytest.approx(1.0))]
 
 
 def test_a_corrupt_cell_file_is_recomputed(tmp_path):
     _calibrate(checkpoint_dir=tmp_path)
-    (tmp_path / "cells" / "color_0.json").write_text('{"raw": ')  # truncated
+    (tmp_path / "cells" / "color_0_0.json").write_text('{"raw": ')  # truncated
 
     counter = {"calls": 0}
     resumed = _calibrate(
@@ -173,14 +180,17 @@ def test_a_corrupt_cell_file_is_recomputed(tmp_path):
     )
 
     assert counter["calls"] == 4
-    assert resumed.score(0, AttributeClass.COLOR) == pytest.approx(0.0)
+    assert resumed.score(HeadUnit(0, 0), AttributeClass.COLOR) == pytest.approx(0.0)
 
 
 def test_checkpoint_records_the_raw_value_not_the_normalised_one(tmp_path):
     _calibrate(checkpoint_dir=tmp_path)
-    cell = json.loads((tmp_path / "cells" / f"color_{LIVE_BLOCK}.json").read_text())
+    cell = json.loads(
+        (tmp_path / "cells" / f"color_{LIVE_UNIT.block}_{LIVE_UNIT.head}.json").read_text()
+    )
 
     assert cell["attribute"] == "color"
-    assert cell["block"] == LIVE_BLOCK
+    assert cell["block"] == LIVE_UNIT.block
+    assert cell["head"] == LIVE_UNIT.head
     assert 0.0 < cell["raw"] <= 1.0
     assert cell["samples"] == 2
