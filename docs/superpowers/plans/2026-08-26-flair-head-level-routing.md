@@ -177,9 +177,12 @@ def test_alpha_vector_fills_only_the_selected_head_slice():
 def test_alpha_vector_supports_different_alpha_per_head():
     vector = alpha_vector({0: 0.2, 2: 0.9}, N_HEADS, HEAD_DIM)
 
-    assert vector[head_slice(0, HEAD_DIM)].tolist() == [0.2] * HEAD_DIM
+    # approx, not equality: alpha_vector builds a float32 tensor and
+    # .tolist() widens each element to float64, so 0.2 comes back as
+    # 0.20000000298023224. The zero assertion stays exact -- 0.0 is.
+    assert vector[head_slice(0, HEAD_DIM)].tolist() == pytest.approx([0.2] * HEAD_DIM)
     assert vector[head_slice(1, HEAD_DIM)].abs().max().item() == 0.0
-    assert vector[head_slice(2, HEAD_DIM)].tolist() == [0.9] * HEAD_DIM
+    assert vector[head_slice(2, HEAD_DIM)].tolist() == pytest.approx([0.9] * HEAD_DIM)
 
 
 def test_alpha_vector_of_every_head_is_uniform():
@@ -2976,6 +2979,21 @@ bundle opens anywhere."
 ```
 
 ---
+
+## Where each piece runs
+
+**Every one of the 13 tasks is written, implemented, and tested on the laptop.** There is no GPU here and `diffusers` is deliberately absent from the Docker image, so nothing in the task list may import it at test time. Only the *sweeps* need Kaggle.
+
+| | Laptop (Docker, CPU) | Kaggle (GPU) |
+|---|---|---|
+| Tasks 1-9, 11-13 — all code and all tests | ✅ `./run-local.sh test` | — |
+| `scripts/explain.py` — routing decisions, no image | ✅ | ✅ |
+| `scripts/verify_api.py` — 19 introspection checks | ❌ needs `diffusers` installed | ✅ (no GPU used, just the package) |
+| `scripts/smoke_test.py` — images | ❌ | ✅ |
+| `scripts/demo.py` — the 4,039-generation demo sweep | ❌ | ✅ |
+| `scripts/calibrate.py` — the full campaign | ❌ | ✅ |
+
+This is the same discipline the existing suite already follows: every routing *decision* is CPU-only and unit-tested with stub tensors; the GPU only turns those decisions into pixels. Do not add `diffusers` to the Dockerfile to work around a failing test — if a test needs it, the test is wrong.
 
 ## Execution order
 
