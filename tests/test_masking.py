@@ -4,6 +4,7 @@ from PIL import Image
 
 from flair_t2i.metrics.masking import (
     MIN_MASK_PIXELS,
+    ClipSegMasker,
     RectMasker,
     mask_area_ratio,
     masked_mean_rgb,
@@ -12,6 +13,35 @@ from flair_t2i.metrics.masking import (
 
 def _solid(rgb, size=(64, 64)):
     return Image.new("RGB", size, rgb)
+
+
+class _RecordingModel:
+    """A model that only remembers where it was asked to move."""
+
+    def __init__(self):
+        self.moved_to = None
+
+    def to(self, device):
+        self.moved_to = device
+        return self
+
+
+def test_clipseg_masker_moves_its_model_to_the_device():
+    """Inputs are sent to self.device, so the weights must go there too.
+
+    Skipping this leaves the model on CPU while inputs land on CUDA, and
+    the failure surfaces only after a 600MB download and a full generation:
+    'Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor)
+    should be the same'.
+    """
+    model = _RecordingModel()
+    ClipSegMasker(model=model, processor=object(), device="cuda")
+    assert model.moved_to == "cuda"
+
+
+def test_clipseg_masker_tolerates_a_model_without_to():
+    """Test stubs are plain objects; construction must not require .to."""
+    ClipSegMasker(model=object(), processor=object(), device="cuda")
 
 
 def test_rect_masker_covers_the_requested_fraction():

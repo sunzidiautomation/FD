@@ -3,6 +3,7 @@ import pytest
 from PIL import Image
 
 from flair_t2i.metrics.embedding import (
+    ClipScorer,
     action_delta,
     clip_norm,
     identity_delta,
@@ -10,6 +11,28 @@ from flair_t2i.metrics.embedding import (
 )
 
 FULL = np.ones((64, 64), dtype=np.float32)
+
+
+class _RecordingModel:
+    """A model that only remembers where it was asked to move."""
+
+    def __init__(self):
+        self.moved_to = None
+
+    def to(self, device):
+        self.moved_to = device
+        return self
+
+
+def test_clip_scorer_moves_its_model_to_the_device():
+    """Same failure mode as ClipSegMasker: inputs on CUDA, weights on CPU."""
+    model = _RecordingModel()
+    ClipScorer(model=model, processor=object(), device="cuda")
+    assert model.moved_to == "cuda"
+
+
+def test_clip_scorer_tolerates_a_model_without_to():
+    ClipScorer(model=object(), processor=object(), device="cuda")
 
 
 def _solid(rgb):
