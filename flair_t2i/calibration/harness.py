@@ -38,7 +38,16 @@ from .corpus import ContrastivePair
 
 @dataclass(frozen=True)
 class SwapSpec:
-    unit: HeadUnit
+    """Which head units receive ``prompt`` in place of the base stream.
+
+    Calibration always swaps exactly one unit -- that is what makes a cell's
+    measurement attributable to that head. The demo sweep also swaps every
+    head of a block at once, to render the block-level counterpart of the
+    same intervention, which is why this is a tuple rather than a single
+    unit.
+    """
+
+    units: tuple[HeadUnit, ...]
     prompt: str
 
 
@@ -118,7 +127,7 @@ def _measure_cell(
             swapped = generate_fn(
                 prompt=pair.base,
                 seed=seed,
-                swap=SwapSpec(unit=unit, prompt=pair.changed),
+                swap=SwapSpec(units=(unit,), prompt=pair.changed),
             )
             if on_pair is not None:
                 on_pair(attr, unit, pair, seed, baseline, swapped)
@@ -246,7 +255,7 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
                 RoutedComponent(
                     component=component,
                     embedding=embeddings["swap"],
-                    units=((swap.unit, 1.0),),
+                    units=tuple((unit, 1.0) for unit in swap.units),
                 ),
             ),
             cfg=swap_cfg,

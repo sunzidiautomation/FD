@@ -130,14 +130,18 @@ def main() -> int:
     attn_src = "".join(inspect.getsource(Attention.__init__).split())
     check("Attention exposes .heads", "self.heads=" in attn_src)
 
-    # install_head_routing wraps block.attn and block.attn2.
+    # A block whose attention module is not in ATTENTION_MODULES routes
+    # nothing -- silently, because the wrapper is simply never installed on
+    # it. So discover what the block actually defines and assert we cover it.
+    from flair_t2i.patching import ATTENTION_MODULES
+
     block_src = "".join(inspect.getsource(JointTransformerBlock.__init__).split())
-    has_attn2 = "self.attn2=" in block_src
+    defined = set(re.findall(r"self\.(attn\d*)=", block_src))
     check(
-        "attn2 handled by install_head_routing"
-        if has_attn2
-        else "no unhandled second attention (attn2) on JointTransformerBlock",
-        True,
+        f"install_head_routing covers every attention module {sorted(defined)}",
+        defined.issubset(set(ATTENTION_MODULES)),
+        f"block defines {sorted(defined)}, patching covers "
+        f"{sorted(ATTENTION_MODULES)} -- add the missing name",
     )
 
     # The final block sets context_pre_only=True and may lack add_*_proj;

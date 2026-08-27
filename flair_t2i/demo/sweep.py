@@ -100,7 +100,10 @@ def run_demo_sweep(
                 prompt=pair.base,
                 seed=seeds[0],
                 swap=SwapSpec(
-                    unit=HeadUnit(block=block, head=head_ids[0]), prompt=pair.changed
+                    units=tuple(
+                        HeadUnit(block=block, head=head) for head in head_ids
+                    ),
+                    prompt=pair.changed,
                 ),
             )
             image.save(paths.block_image(attr, block))

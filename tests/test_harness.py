@@ -31,7 +31,7 @@ def _corpus(attr=AttributeClass.COLOR, phrase=None):
 
 def fake_generate(prompt: str, seed: int, swap: SwapSpec | None) -> Image.Image:
     """Only a swap at LIVE_UNIT actually changes the image."""
-    if swap is not None and swap.unit == LIVE_UNIT and "blue" in swap.prompt:
+    if swap is not None and swap.units == (LIVE_UNIT,) and "blue" in swap.prompt:
         return Image.new("RGB", (64, 64), (30, 30, 220))
     return Image.new("RGB", (64, 64), (220, 30, 30))
 
@@ -84,7 +84,9 @@ def test_all_scores_land_in_the_unit_interval():
 
 
 def test_a_flat_response_normalises_to_zero_rather_than_dividing_by_zero():
-    flat = lambda prompt, seed, swap: Image.new("RGB", (64, 64), (128, 128, 128))
+    def flat(prompt, seed, swap):
+        return Image.new("RGB", (64, 64), (128, 128, 128))
+
     hasm = _calibrate(generate_fn=flat)
     assert hasm.tensor.max() == pytest.approx(0.0)
 

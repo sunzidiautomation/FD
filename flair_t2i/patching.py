@@ -19,13 +19,20 @@ from .processor import PlanRef
 #: routing does it.
 TEXT_PROJECTIONS = ("add_q_proj", "add_k_proj", "add_v_proj")
 
+#: Every attention module a transformer block may carry. SD3.5-M gives part
+#: of its stack a second attention (``attn2``), and a block whose attention
+#: is not listed here routes nothing -- silently, since the wrapper simply
+#: never gets installed. ``scripts/verify_api.py`` asserts this covers what
+#: diffusers actually defines, so a future ``attn3`` fails loudly instead.
+ATTENTION_MODULES = ("attn", "attn2")
+
 
 def install_head_routing(transformer, ref: PlanRef) -> list[tuple]:
     """Wrap every text-stream projection. Returns handles for removal."""
     handles: list[tuple] = []
 
     for block_id, block in enumerate(transformer.transformer_blocks):
-        for attn_name in ("attn", "attn2"):
+        for attn_name in ATTENTION_MODULES:
             attn = getattr(block, attn_name, None)
             if attn is None:
                 continue
