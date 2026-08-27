@@ -68,7 +68,7 @@ def rescore(
 ):
     """Return (raw scores by unit, rejected units, rejection reasons)."""
     baseline = Image.open(paths.baseline_image(attr)).convert("RGB")
-    metric = delta_for(attr, scorer=scorer, phrase=phrase)
+
     # identity crops to this; the scene-level metrics ignore it. The label
     # has to be the corpus's own -- segmenting for "object" instead of
     # "sedan" would crop to whatever ClipSeg guessed, silently.
@@ -78,6 +78,12 @@ def rescore(
         if not pairs:
             raise SystemExit(f"no corpus pairs for {attr.value}")
         mask = masker(baseline, pairs[0].object_label)
+        # The swap injected pairs[0].changed, so that is what a head
+        # controlling this attribute should have moved the object toward.
+        if attr is AttributeClass.IDENTITY and phrase is None:
+            phrase = pairs[0].changed
+
+    metric = delta_for(attr, scorer=scorer, phrase=phrase)
 
     raw: dict[HeadUnit, float] = {}
     rejected: set[HeadUnit] = set()

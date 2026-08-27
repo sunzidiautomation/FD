@@ -170,6 +170,38 @@ def identity_delta(
     )
 
 
+def identity_target_delta(
+    image_a: Image.Image,
+    image_b: Image.Image,
+    mask: np.ndarray | None,
+    scorer: ImageTextScorer,
+    target_phrase: str,
+) -> float:
+    """How much more the object resembles the concept swapped in.
+
+    ``identity_delta`` measures distance FROM the baseline, and damage
+    maximises distance by construction -- a destroyed object is maximally
+    far from every starting point, so no gate can separate the two: they
+    are the same axis. Resemblance TO the target cannot be won that way,
+    because noise does not look like a tractor; a collapsed frame's
+    similarity to every phrase falls, so it scores zero rather than
+    maximum.
+
+    Deliberately not a difference of differences against the base phrase.
+    That form counts losing sedan-ness as gaining tractor-ness, so a frame
+    that resembles nothing scores as a successful identity swap -- which is
+    the failure being fixed, reintroduced one level up.
+
+    Clamped at zero: becoming less target-like is not identity control
+    toward the target.
+    """
+    crop_a = crop_to_mask(image_a, mask)
+    crop_b = crop_to_mask(image_b, mask)
+    before = float(np.asarray(scorer.image_text_similarity(crop_a, [target_phrase]))[0])
+    after = float(np.asarray(scorer.image_text_similarity(crop_b, [target_phrase]))[0])
+    return float(np.clip((after - before) / CLIP_SIM_SPAN, 0.0, 1.0))
+
+
 def style_delta(
     image_a: Image.Image,
     image_b: Image.Image,

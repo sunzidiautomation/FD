@@ -17,7 +17,13 @@ import numpy as np
 from PIL import Image
 
 from ..attributes import AttributeClass
-from .embedding import ImageTextScorer, action_delta, identity_delta, style_delta
+from .embedding import (
+    ImageTextScorer,
+    action_delta,
+    identity_delta,
+    identity_target_delta,
+    style_delta,
+)
 from .photometric import color_delta, lighting_delta, size_delta
 from .texture import gram_texture_delta
 
@@ -61,6 +67,11 @@ def delta_for(
         # See the module docstring: reads 0 against one shared mask.
         return lambda a, b, mask: size_delta(a, b, mask, mask)
     if kind == "identity":
+        if phrase:
+            # A target phrase turns identity from "how far from the base"
+            # into "how close to what was swapped in" -- the form damage
+            # cannot maximise. See embedding.identity_target_delta.
+            return lambda a, b, mask: identity_target_delta(a, b, mask, scorer, phrase)
         return lambda a, b, mask: identity_delta(a, b, mask, scorer)
     if kind == "style":
         return lambda a, b, mask: style_delta(a, b, mask, scorer)

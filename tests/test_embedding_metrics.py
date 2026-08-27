@@ -7,6 +7,7 @@ from flair_t2i.metrics.embedding import (
     action_delta,
     clip_norm,
     identity_delta,
+    identity_target_delta,
     style_delta,
 )
 
@@ -156,3 +157,83 @@ def test_identity_tolerates_an_empty_mask():
     empty = np.zeros((64, 64), dtype=np.float32)
     base = _object_on((30, 30, 30))
     assert identity_delta(base, base, empty, FakeScorer()) == pytest.approx(0.0)
+
+
+# ------------------------------------------- identity, measured toward a target
+
+
+class PhraseScorer:
+    """Similarity looked up by (mean pixel value, phrase), so tests control it."""
+
+    def __init__(self, table):
+        self.table = table
+
+    def image_text_similarity(self, image, texts):
+        key = int(round(np.asarray(image.convert("RGB"), dtype=np.float64).mean()))
+        return np.array([self.table[(key, t)] for t in texts], dtype=np.float64)
+
+
+SEDAN, TRACTOR = "a sedan parked on a road", "a tractor parked on a road"
+
+
+def _grey(value, size=64):
+    return Image.new("RGB", (size, size), (value, value, value))
+
+
+def test_moving_toward_the_target_scores_above_zero():
+    scorer = PhraseScorer(
+        {
+            (10, SEDAN): 0.30, (10, TRACTOR): 0.20,  # baseline: reads as a sedan
+            (20, SEDAN): 0.20, (20, TRACTOR): 0.32,  # swapped: reads as a tractor
+        }
+    )
+    assert identity_target_delta(
+        _grey(10), _grey(20), None, scorer, TRACTOR
+    ) > 0.0
+
+
+def test_moving_away_from_the_target_scores_zero():
+    scorer = PhraseScorer(
+        {
+            (10, SEDAN): 0.30, (10, TRACTOR): 0.20,
+            (20, SEDAN): 0.40, (20, TRACTOR): 0.10,  # even more sedan-like
+        }
+    )
+    assert identity_target_delta(
+        _grey(10), _grey(20), None, scorer, TRACTOR
+    ) == pytest.approx(0.0)
+
+
+def test_degradation_does_not_score_high():
+    """The whole point of measuring toward a target.
+
+    A destroyed frame resembles nothing, so every similarity collapses
+    together. Distance FROM the baseline is maximised by exactly that;
+    movement TOWARD the target is not, because noise does not look like a
+    tractor.
+    """
+    scorer = PhraseScorer(
+        {
+            (10, SEDAN): 0.30, (10, TRACTOR): 0.20,
+            (20, SEDAN): 0.02, (20, TRACTOR): 0.02,  # resembles nothing
+        }
+    )
+    assert identity_target_delta(
+        _grey(10), _grey(20), None, scorer, TRACTOR
+    ) == pytest.approx(0.0)
+
+
+def test_target_metric_reads_only_inside_the_mask():
+    mask = _object_mask()
+    scorer = PhraseScorer(
+        {
+            (250, SEDAN): 0.30, (250, TRACTOR): 0.20,
+            (255, SEDAN): 0.20, (255, TRACTOR): 0.30,
+        }
+    )
+    # backgrounds differ wildly; the object crop is what gets embedded
+    base = _object_on((0, 0, 0))
+    swapped = _object_on((200, 200, 200))
+    swapped.paste(Image.new("RGB", (24, 24), (255, 255, 255)), (20, 20))
+
+    assert identity_target_delta(base, swapped, mask, scorer, TRACTOR) > 0.0
