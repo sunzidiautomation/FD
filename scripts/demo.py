@@ -56,6 +56,14 @@ def main() -> None:
         help="Comma-separated attribute names to run (e.g. 'color' or "
         "'color,size'). Default runs all attributes.",
     )
+    parser.add_argument(
+        "--blocks",
+        "--block-ids",
+        dest="blocks",
+        type=str,
+        default=None,
+        help="Range or comma-separated blocks to sweep (e.g. '0-11', '12-23', or '0,1,2'). Default runs all blocks.",
+    )
     args = parser.parse_args()
 
     # Set CUDA memory allocator configuration to prevent fragmentation OOM
@@ -93,7 +101,17 @@ def main() -> None:
 
     n_blocks = len(pipe.transformer.transformer_blocks)
     n_heads = pipe.transformer.transformer_blocks[0].attn.heads
-    block_ids, head_ids = tuple(range(n_blocks)), tuple(range(n_heads))
+
+    if args.blocks:
+        if "-" in args.blocks:
+            start, end = map(int, args.blocks.split("-", 1))
+            block_ids = tuple(range(start, end + 1))
+        else:
+            block_ids = tuple(int(b.strip()) for b in args.blocks.split(",") if b.strip())
+    else:
+        block_ids = tuple(range(n_blocks))
+
+    head_ids = tuple(range(n_heads))
 
     fp = FlairPipeline(
         pipe,
@@ -102,13 +120,22 @@ def main() -> None:
         nlp=spacy.load("en_core_web_sm"),
     )
 
+    from flair_t2i.attributes import AttributeClass
+
+    raw_corpus = load_corpus(DEFAULT_CORPUS_PATH)
+    if args.attributes:
+        requested = [AttributeClass(a.strip()) for a in args.attributes.split(",") if a.strip()]
+        raw_corpus = {attr: pairs for attr, pairs in raw_corpus.items() if attr in requested}
+        if not raw_corpus:
+            raise ValueError(f"no matching attributes found for {args.attributes!r}")
+
     corpus = {
         attr: pairs[: args.pairs]
-        for attr, pairs in load_corpus(DEFAULT_CORPUS_PATH).items()
+        for attr, pairs in raw_corpus.items()
     }
-    total = len(corpus) * args.pairs * (1 + n_blocks * n_heads)
-    print(f"{n_blocks} blocks x {n_heads} heads = {n_blocks * n_heads} units")
-    print(f"{len(corpus)} attributes x {args.pairs} pair(s) -- {total} generations\n")
+    total = len(corpus) * args.pairs * (1 + len(block_ids) * len(head_ids))
+    print(f"{len(block_ids)} blocks {block_ids} x {len(head_ids)} heads = {len(block_ids) * len(head_ids)} units")
+    print(f"{len(corpus)} attribute(s) {[a.value for a in corpus]} x {args.pairs} pair(s) -- {total} generations\n")
 
     hasm = run_demo_sweep(
         make_swap_generate_fn(fp, steps=args.steps),
