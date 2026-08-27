@@ -32,10 +32,12 @@ import numpy as np
 from PIL import Image
 
 from flair_t2i.attributes import AttributeClass
+from flair_t2i.calibration.corpus import DEFAULT_CORPUS_PATH, load_corpus
 from flair_t2i.demo.report import write_report
 from flair_t2i.demo.sweep import DemoPaths
 from flair_t2i.hasm import HASM
 from flair_t2i.heads import HeadUnit
+from flair_t2i.metrics.embedding import crop_to_mask
 from flair_t2i.metrics.integrity import IntegrityGate
 from flair_t2i.metrics.registry import delta_for
 
@@ -67,8 +69,15 @@ def rescore(
     """Return (raw scores by unit, rejected units, rejection reasons)."""
     baseline = Image.open(paths.baseline_image(attr)).convert("RGB")
     metric = delta_for(attr, scorer=scorer, phrase=phrase)
-    # identity crops to this; the scene-level metrics ignore it.
-    mask = masker(baseline, "object") if masker is not None else None
+    # identity crops to this; the scene-level metrics ignore it. The label
+    # has to be the corpus's own -- segmenting for "object" instead of
+    # "sedan" would crop to whatever ClipSeg guessed, silently.
+    mask = None
+    if masker is not None:
+        pairs = load_corpus(DEFAULT_CORPUS_PATH).get(attr, [])
+        if not pairs:
+            raise SystemExit(f"no corpus pairs for {attr.value}")
+        mask = masker(baseline, pairs[0].object_label)
 
     raw: dict[HeadUnit, float] = {}
     rejected: set[HeadUnit] = set()
@@ -76,7 +85,13 @@ def rescore(
 
     for unit, path in _units(paths, attr).items():
         candidate = Image.open(path).convert("RGB")
-        verdict = gate.check(baseline, candidate)
+        # Gate the same region the metric measures. A frame whose object is
+        # destroyed but whose background survives passes a whole-frame gate
+        # and then maxes out an object-cropped metric -- which is how a car
+        # buried in confetti outranked every genuine identity change.
+        verdict = gate.check(
+            crop_to_mask(baseline, mask), crop_to_mask(candidate, mask)
+        )
         if not verdict.ok:
             rejected.add(unit)
             raw[unit] = 0.0
