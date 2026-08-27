@@ -101,3 +101,58 @@ def test_action_delta_responds_to_a_changed_image():
         "a car driving",
     )
     assert delta > 0.0
+
+
+# --------------------------------------------------- identity uses its mask
+
+
+def _object_on(background, size=64, box=(20, 20, 44, 44)):
+    """A fixed bright object drawn on a variable background."""
+    image = Image.new("RGB", (size, size), background)
+    image.paste(Image.new("RGB", (box[2] - box[0], box[3] - box[1]), (250, 250, 250)), box[:2])
+    return image
+
+
+def _object_mask(size=64, box=(20, 20, 44, 44)):
+    mask = np.zeros((size, size), dtype=np.float32)
+    mask[box[1] : box[3], box[0] : box[2]] = 1.0
+    return mask
+
+
+def test_identity_ignores_a_background_only_change():
+    """Identity is an object-level attribute.
+
+    Its metric is handed the object mask precisely so a repainted sky or a
+    recomposed background cannot be scored as the object becoming a
+    different thing. Without this the metric degenerates into 'how
+    different is this image', which every collapsed or merely degraded
+    frame maximises.
+    """
+    mask = _object_mask()
+    same_object = _object_on((30, 30, 30))
+    moved_background = _object_on((200, 40, 40))
+
+    assert identity_delta(
+        same_object, moved_background, mask, FakeScorer()
+    ) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_identity_still_sees_a_change_inside_the_mask():
+    mask = _object_mask()
+    base = _object_on((30, 30, 30))
+    swapped = _object_on((30, 30, 30))
+    swapped.paste(Image.new("RGB", (24, 24), (10, 10, 240)), (20, 20))
+
+    assert identity_delta(base, swapped, mask, FakeScorer()) > 0.05
+
+
+def test_identity_falls_back_to_the_whole_image_without_a_mask():
+    base = _object_on((30, 30, 30))
+    other = _object_on((200, 40, 40))
+    assert identity_delta(base, other, None, FakeScorer()) > 0.0
+
+
+def test_identity_tolerates_an_empty_mask():
+    empty = np.zeros((64, 64), dtype=np.float32)
+    base = _object_on((30, 30, 30))
+    assert identity_delta(base, base, empty, FakeScorer()) == pytest.approx(0.0)

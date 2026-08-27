@@ -123,15 +123,50 @@ def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.clip((1.0 - cosine) / 2.0, 0.0, 1.0))
 
 
+def crop_to_mask(
+    image: Image.Image, mask: np.ndarray | None, pad: float = 0.0
+) -> Image.Image:
+    """The mask's bounding box. Returns the image unchanged without a mask.
+
+    ``pad`` defaults to none on purpose: every pixel of context is a pixel
+    of background, and background leaking in is exactly the contamination
+    this crop exists to remove. Raise it only if ClipSeg is under-segmenting
+    and clipping the object itself.
+    """
+    if mask is None:
+        return image
+    rows, cols = np.nonzero(np.asarray(mask) > 0.5)
+    if rows.size == 0:
+        return image
+
+    height, width = np.asarray(mask).shape[:2]
+    margin_y, margin_x = int(pad * height), int(pad * width)
+    box = (
+        max(0, int(cols.min()) - margin_x),
+        max(0, int(rows.min()) - margin_y),
+        min(width, int(cols.max()) + 1 + margin_x),
+        min(height, int(rows.max()) + 1 + margin_y),
+    )
+    return image.crop(box)
+
+
 def identity_delta(
     image_a: Image.Image,
     image_b: Image.Image,
     mask: np.ndarray,
     scorer: ImageTextScorer,
 ) -> float:
-    """How far the object's identity moved, as CLIP embedding distance."""
+    """How far the object's identity moved, as CLIP embedding distance.
+
+    Confined to the object's bounding box. Identity is an object-level
+    attribute, so embedding the whole frame would score a repainted sky or
+    a recomposed background as the object becoming a different thing --
+    which degenerates the metric into "how different is this image", a
+    question every collapsed or merely degraded frame answers loudly.
+    """
     return _cosine_distance(
-        scorer.image_embedding(image_a), scorer.image_embedding(image_b)
+        scorer.image_embedding(crop_to_mask(image_a, mask)),
+        scorer.image_embedding(crop_to_mask(image_b, mask)),
     )
 
 

@@ -56,10 +56,19 @@ def _units(paths: DemoPaths, attr: AttributeClass):
     return found
 
 
-def rescore(paths: DemoPaths, attr: AttributeClass, gate: IntegrityGate):
+def rescore(
+    paths: DemoPaths,
+    attr: AttributeClass,
+    gate: IntegrityGate,
+    scorer=None,
+    masker=None,
+    phrase: str | None = None,
+):
     """Return (raw scores by unit, rejected units, rejection reasons)."""
     baseline = Image.open(paths.baseline_image(attr)).convert("RGB")
-    metric = delta_for(attr, scorer=None, phrase=None)
+    metric = delta_for(attr, scorer=scorer, phrase=phrase)
+    # identity crops to this; the scene-level metrics ignore it.
+    mask = masker(baseline, "object") if masker is not None else None
 
     raw: dict[HeadUnit, float] = {}
     rejected: set[HeadUnit] = set()
@@ -73,7 +82,7 @@ def rescore(paths: DemoPaths, attr: AttributeClass, gate: IntegrityGate):
             raw[unit] = 0.0
             reasons[f"b{unit.block}_h{unit.head}"] = verdict.reason
             continue
-        raw[unit] = float(metric(baseline, candidate, None))
+        raw[unit] = float(metric(baseline, candidate, mask))
 
     return raw, rejected, reasons
 
@@ -136,10 +145,24 @@ def main() -> None:
         "whose metric needs CLIP or ClipSeg, which are not installed locally.",
     )
     parser.add_argument(
+        "--with-clip",
+        action="store_true",
+        help="load ClipSeg and CLIP so attributes needing them (identity, "
+        "style, action) can be recomputed from the saved images. Needs "
+        "transformers -- run this on Kaggle, not in the local image. Still "
+        "no generation: minutes, not hours.",
+    )
+    parser.add_argument(
         "--attribute",
         default=None,
         help="attribute name, required with --from-matrix when the bundle's "
         "baseline filename does not name it",
+    )
+    parser.add_argument(
+        "--metric-device", default="cuda", help="where ClipSeg/CLIP run"
+    )
+    parser.add_argument(
+        "--phrase", default=None, help="action phrase, only needed for --attribute action"
     )
     parser.add_argument("--min-colour-ratio", type=float, default=0.75)
     parser.add_argument("--max-structural-change", type=float, default=0.60)
@@ -158,7 +181,17 @@ def main() -> None:
         _repair_from_matrix(paths, gate, args)
         return
 
-    attrs = [a for a in RESCORABLE if paths.baseline_image(a).exists()]
+    scorer = masker = None
+    rescorable = RESCORABLE
+    if args.with_clip:
+        from flair_t2i.metrics.embedding import ClipScorer
+        from flair_t2i.metrics.masking import ClipSegMasker
+
+        scorer = ClipScorer(device=args.metric_device)
+        masker = ClipSegMasker(device=args.metric_device)
+        rescorable = tuple(AttributeClass)
+
+    attrs = [a for a in rescorable if paths.baseline_image(a).exists()]
     if not attrs:
         available = sorted(p.stem for p in paths.baselines.glob("*.png"))
         parser.error(
@@ -171,7 +204,9 @@ def main() -> None:
 
     all_raw, all_rejected, all_reasons = {}, set(), {}
     for attr in attrs:
-        raw, rejected, reasons = rescore(paths, attr, gate)
+        raw, rejected, reasons = rescore(
+            paths, attr, gate, scorer=scorer, masker=masker, phrase=args.phrase
+        )
         all_raw[attr] = raw
         all_rejected |= rejected
         all_reasons[attr.value] = reasons
