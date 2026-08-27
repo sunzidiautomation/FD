@@ -116,14 +116,26 @@ def _measure_cell(
     masker: Masker,
     scorer: ImageTextScorer | None,
     on_pair: PairFn | None = None,
+    baselines: dict[tuple[str, int], Image.Image] | None = None,
 ) -> tuple[float, int]:
-    """Mean attribute change for one (attribute, head unit), over every pair."""
+    """Mean attribute change for one (attribute, head unit), over every pair.
+
+    ``baselines`` is a cache owned by :func:`calibrate` and shared across
+    every cell. The base-prompt image for a given (pair, seed) is identical
+    no matter which head is swapped, so generating it per cell would double
+    the campaign -- ``A*P*S*units*2`` instead of ``A*P*S*(1+units)``.
+    """
     deltas: list[float] = []
+    if baselines is None:
+        baselines = {}
 
     for pair in pairs:
         metric = delta_for(attr, scorer=scorer, phrase=pair.phrase)
         for seed in seeds:
-            baseline = generate_fn(prompt=pair.base, seed=seed, swap=None)
+            key = (pair.base, seed)
+            if key not in baselines:
+                baselines[key] = generate_fn(prompt=pair.base, seed=seed, swap=None)
+            baseline = baselines[key]
             swapped = generate_fn(
                 prompt=pair.base,
                 seed=seed,
@@ -167,6 +179,10 @@ def calibrate(
     attributes = tuple(a for a in AttributeClass if a in corpus)
     raw = np.zeros((len(block_ids), len(head_ids), len(attributes)))
 
+    # Shared across every cell: see _measure_cell's docstring. Holds at most
+    # pairs x seeds images, which is tens, not thousands.
+    baselines: dict[tuple[str, int], Image.Image] = {}
+
     for plane, attr in enumerate(attributes):
         for i, block_id in enumerate(block_ids):
             for j, head_id in enumerate(head_ids):
@@ -189,6 +205,7 @@ def calibrate(
                         masker,
                         scorer,
                         on_pair=on_pair,
+                        baselines=baselines,
                     )
                     raw[i, j, plane] = value
                     if checkpoint_dir is not None:
@@ -237,6 +254,8 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
         t_window=(0.0, 1.0),
         model_id=flair_pipeline.cfg.model_id,
         max_sequence_length=flair_pipeline.cfg.max_sequence_length,
+        height=flair_pipeline.cfg.height,
+        width=flair_pipeline.cfg.width,
     )
 
     @torch.inference_mode()
@@ -273,6 +292,8 @@ def make_swap_generate_fn(flair_pipeline, steps: int) -> SwapGenerateFn:
                 prompt=prompt,
                 num_inference_steps=steps,
                 guidance_scale=4.5,
+                height=swap_cfg.height,
+                width=swap_cfg.width,
                 generator=torch.Generator(device="cpu").manual_seed(seed),
                 callback_on_step_end=on_step,
             )

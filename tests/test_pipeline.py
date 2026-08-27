@@ -70,6 +70,33 @@ def test_encode_components_returns_one_embedding_per_component():
     assert embeddings["c_color"].shape == (SEQ, DIM)
 
 
+def test_generate_pins_resolution_from_config():
+    """SD3.5 defaults to 1024x1024 when height/width are omitted.
+
+    That is 4-6x the cost of 512 and silently invalidates every budget in
+    the campaign plan, which assumes 512. Pin it here so it cannot drift
+    back by omission.
+    """
+    pipe = StubPipe()
+    fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())
+
+    fp.generate("a red car", steps=2, routing=False)
+
+    assert pipe.calls[0]["height"] == 512
+    assert pipe.calls[0]["width"] == 512
+
+
+def test_generate_honours_a_resolution_override():
+    pipe = StubPipe()
+    cfg = FlairConfig(device="cpu", height=768, width=768)
+    fp = FlairPipeline(pipe, cfg, _hasm())
+
+    fp.generate("a red car", steps=2, routing=False)
+
+    assert pipe.calls[0]["height"] == 768
+    assert pipe.calls[0]["width"] == 768
+
+
 def test_generate_installs_routing_and_returns_image(monkeypatch):
     pipe = StubPipe()
     fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())

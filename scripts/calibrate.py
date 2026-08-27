@@ -31,7 +31,6 @@ from flair_t2i.attributes import CORE_ATTRIBUTES
 from flair_t2i.calibration.corpus import DEFAULT_CORPUS_PATH, load_corpus
 from flair_t2i.calibration.harness import calibrate, make_swap_generate_fn
 from flair_t2i.calibration.prefilter import (
-    VitalityReport,
     lpips_distance,
     make_bypass_generate_fn,
     run_prefilter,
@@ -92,12 +91,20 @@ def main() -> None:
     parser.add_argument("--vitality", type=Path)
     parser.add_argument("--out", type=Path, default=Path("calibration_runs"))
     parser.add_argument(
+        "--metric-device",
+        default="cuda",
+        help="where ClipSeg/CLIP run. ClipSeg on CPU costs 1-3s per cell and "
+        "there are thousands of cells; fp16 on GPU it is ~150MB. Use 'cpu' "
+        "only if VRAM genuinely will not stretch.",
+    )
+    parser.add_argument(
         "--attribute",
         "--attributes",
         dest="attributes",
         type=str,
         default=None,
-        help="Comma-separated attribute names to calibrate (e.g. 'color' or 'color,size'). Default runs all attributes.",
+        help="Comma-separated attribute names to calibrate (e.g. 'color' or "
+        "'color,size'). Default runs all attributes.",
     )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -150,7 +157,10 @@ def main() -> None:
     pairs = sum(len(v) for v in corpus.values())
     units = n_blocks * n_heads
     total = pairs * len(args.seeds) * (1 + units)
-    print(f"calibrating {len(corpus)} attribute(s) {[a.value for a in corpus]} over {units} head units")
+    print(
+        f"calibrating {len(corpus)} attribute(s) {[a.value for a in corpus]} "
+        f"over {units} head units"
+    )
     print(f"  {n_blocks} blocks x {n_heads} heads")
     print(f"  {pairs} pairs x {len(args.seeds)} seed(s) -- up to {total} generations")
     print(f"checkpointing to {args.out / 'cells'} -- safe to re-run after a timeout\n")
@@ -160,9 +170,9 @@ def main() -> None:
         corpus=corpus,
         block_ids=block_ids,
         head_ids=head_ids,
-        masker=ClipSegMasker(device="cpu"),
+        masker=ClipSegMasker(device=args.metric_device),
         seeds=args.seeds,
-        scorer=ClipScorer(device="cpu"),
+        scorer=ClipScorer(device=args.metric_device),
         checkpoint_dir=args.out,
         progress=lambda attr, unit, value: print(
             f"  {attr.value:<9} B{unit.block:<3}H{unit.head:<3} raw={value:.4f}"

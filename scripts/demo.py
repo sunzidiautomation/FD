@@ -38,6 +38,13 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--metric-device",
+        default="cuda",
+        help="where ClipSeg/CLIP run. ClipSeg on CPU costs 1-3s per cell and "
+        "there are thousands of cells; fp16 on GPU it is ~150MB. Use 'cpu' "
+        "only if VRAM genuinely will not stretch.",
+    )
+    parser.add_argument(
         "--pairs", type=int, default=1, help="contrastive pairs per attribute"
     )
     parser.add_argument(
@@ -46,7 +53,8 @@ def main() -> None:
         dest="attributes",
         type=str,
         default=None,
-        help="Comma-separated attribute names to run (e.g. 'color' or 'color,size'). Default runs all attributes.",
+        help="Comma-separated attribute names to run (e.g. 'color' or "
+        "'color,size'). Default runs all attributes.",
     )
     args = parser.parse_args()
 
@@ -94,32 +102,23 @@ def main() -> None:
         nlp=spacy.load("en_core_web_sm"),
     )
 
-    from flair_t2i.attributes import AttributeClass
-
-    raw_corpus = load_corpus(DEFAULT_CORPUS_PATH)
-    if args.attributes:
-        requested = [AttributeClass(a.strip()) for a in args.attributes.split(",") if a.strip()]
-        raw_corpus = {attr: pairs for attr, pairs in raw_corpus.items() if attr in requested}
-        if not raw_corpus:
-            raise ValueError(f"no matching attributes found for {args.attributes!r}")
-
     corpus = {
         attr: pairs[: args.pairs]
-        for attr, pairs in raw_corpus.items()
+        for attr, pairs in load_corpus(DEFAULT_CORPUS_PATH).items()
     }
     total = len(corpus) * args.pairs * (1 + n_blocks * n_heads)
     print(f"{n_blocks} blocks x {n_heads} heads = {n_blocks * n_heads} units")
-    print(f"{len(corpus)} attribute(s) {[a.value for a in corpus]} x {args.pairs} pair(s) -- {total} generations\n")
+    print(f"{len(corpus)} attributes x {args.pairs} pair(s) -- {total} generations\n")
 
     hasm = run_demo_sweep(
         make_swap_generate_fn(fp, steps=args.steps),
         corpus=corpus,
         block_ids=block_ids,
         head_ids=head_ids,
-        masker=ClipSegMasker(device="cpu"),
+        masker=ClipSegMasker(device=args.metric_device),
         paths=DemoPaths(args.out),
         seeds=[args.seed],
-        scorer=ClipScorer(device="cpu"),
+        scorer=ClipScorer(device=args.metric_device),
         progress=lambda attr, unit, value: print(
             f"  {attr.value:<9} B{unit.block:<3}H{unit.head:<3} raw={value:.4f}"
         ),

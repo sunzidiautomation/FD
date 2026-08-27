@@ -120,6 +120,8 @@ class FlairPipeline:
                 prompt=prompt,
                 num_inference_steps=steps,
                 guidance_scale=guidance_scale,
+                height=self.cfg.height,
+                width=self.cfg.width,
                 generator=torch.Generator(device="cpu").manual_seed(seed),
                 callback_on_step_end=on_step,
             )

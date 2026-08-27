@@ -83,6 +83,31 @@ def test_all_scores_land_in_the_unit_interval():
     assert hasm.tensor.min() >= 0.0 and hasm.tensor.max() <= 1.0
 
 
+def test_baseline_is_generated_once_per_prompt_and_seed():
+    """The baseline does not depend on which head is swapped.
+
+    Regenerating it per cell doubles the entire campaign: the cost goes
+    from A*P*S*(1+units) to A*P*S*units*2. run_prefilter already shares
+    baselines this way (prefilter.py); the harness must too.
+    """
+    calls: list[SwapSpec | None] = []
+
+    def counting(prompt: str, seed: int, swap: SwapSpec | None) -> Image.Image:
+        calls.append(swap)
+        return fake_generate(prompt, seed, swap)
+
+    _calibrate(generate_fn=counting)
+
+    baselines = [c for c in calls if c is None]
+    swaps = [c for c in calls if c is not None]
+
+    n_pairs, n_cells = len(_corpus()[AttributeClass.COLOR]), len(BLOCK_IDS) * len(HEAD_IDS)
+
+    # one baseline per (pair, seed) -- NOT one per cell
+    assert len(baselines) == n_pairs * len(SEEDS)
+    assert len(swaps) == n_pairs * len(SEEDS) * n_cells
+
+
 def test_a_flat_response_normalises_to_zero_rather_than_dividing_by_zero():
     def flat(prompt, seed, swap):
         return Image.new("RGB", (64, 64), (128, 128, 128))

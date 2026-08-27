@@ -21,5 +21,13 @@ class FlairConfig:
     model_id: str = "stabilityai/stable-diffusion-3.5-medium"
     max_sequence_length: int = 256
 
+    # Generation resolution. SD3.5 defaults to 1024x1024, which is roughly
+    # 4-6x the cost of 512: the latent grid goes from 32x32 to 64x64 tokens,
+    # and attention scales with the square of that. Every budget in the
+    # campaign plan assumes 512. Raise it for final paper figures, not for
+    # calibration sweeps.
+    height: int = 512
+    width: int = 512
+
 
 DEFAULT_CONFIG = FlairConfig()
