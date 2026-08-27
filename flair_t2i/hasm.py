@@ -112,3 +112,35 @@ class HASM:
             head_ids=tuple(int(h) for h in data["head_ids"]),
             attributes=tuple(AttributeClass(a) for a in data["attributes"]),
         )
+
+    @classmethod
+    def merge(cls, hasms: list["HASM"]) -> "HASM":
+        """Merge multiple single-attribute or partial HASMs into one combined HASM."""
+        if not hasms:
+            raise ValueError("cannot merge empty HASM list")
+        block_ids = hasms[0].block_ids
+        head_ids = hasms[0].head_ids
+
+        # Collect unique attributes across all input HASMs
+        attributes: list[AttributeClass] = []
+        for h in hasms:
+            if h.block_ids != block_ids or h.head_ids != head_ids:
+                raise ValueError(
+                    "all HASMs to merge must have identical block_ids and head_ids"
+                )
+            for a in h.attributes:
+                if a not in attributes:
+                    attributes.append(a)
+
+        tensor = np.zeros(
+            (len(block_ids), len(head_ids), len(attributes)), dtype=np.float64
+        )
+        for a_idx, attr in enumerate(attributes):
+            for h in hasms:
+                if attr in h.attributes:
+                    plane = h.tensor[:, :, h._plane(attr)]
+                    tensor[:, :, a_idx] = plane
+                    break
+
+        return cls(tensor, block_ids, head_ids, tuple(attributes))
+

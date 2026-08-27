@@ -91,6 +91,14 @@ def main() -> None:
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument("--vitality", type=Path)
     parser.add_argument("--out", type=Path, default=Path("calibration_runs"))
+    parser.add_argument(
+        "--attribute",
+        "--attributes",
+        dest="attributes",
+        type=str,
+        default=None,
+        help="Comma-separated attribute names to calibrate (e.g. 'color' or 'color,size'). Default runs all attributes.",
+    )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -123,7 +131,17 @@ def main() -> None:
         print(f"elbow rule suggests:  {report.elbow()}")
         return
 
-    corpus = load_corpus(DEFAULT_CORPUS_PATH)
+    from flair_t2i.attributes import AttributeClass
+
+    raw_corpus = load_corpus(DEFAULT_CORPUS_PATH)
+    if args.attributes:
+        requested = [AttributeClass(a.strip()) for a in args.attributes.split(",") if a.strip()]
+        corpus = {attr: pairs for attr, pairs in raw_corpus.items() if attr in requested}
+        if not corpus:
+            raise ValueError(f"no matching attributes found for {args.attributes!r}")
+    else:
+        corpus = raw_corpus
+
     n_blocks = len(fp.pipe.transformer.transformer_blocks)
     n_heads = fp.pipe.transformer.transformer_blocks[0].attn.heads
     block_ids = tuple(range(n_blocks))
@@ -132,7 +150,7 @@ def main() -> None:
     pairs = sum(len(v) for v in corpus.values())
     units = n_blocks * n_heads
     total = pairs * len(args.seeds) * (1 + units)
-    print(f"calibrating {len(corpus)} attributes over {units} head units")
+    print(f"calibrating {len(corpus)} attribute(s) {[a.value for a in corpus]} over {units} head units")
     print(f"  {n_blocks} blocks x {n_heads} heads")
     print(f"  {pairs} pairs x {len(args.seeds)} seed(s) -- up to {total} generations")
     print(f"checkpointing to {args.out / 'cells'} -- safe to re-run after a timeout\n")

@@ -99,3 +99,39 @@ def test_save_load_round_trip(tmp_path):
 def test_uniform_factory_is_all_half():
     hasm = HASM.uniform((1, 2), (0, 1), ATTRS)
     assert hasm.score(HeadUnit(1, 0), AttributeClass.COLOR) == 0.5
+
+
+def test_merge_combines_single_attribute_hasms():
+    h_color = HASM(
+        np.array([[[0.9], [0.1]], [[0.2], [0.3]]]),
+        BLOCKS,
+        HEADS,
+        (AttributeClass.COLOR,),
+    )
+    h_size = HASM(
+        np.array([[[0.4], [0.8]], [[0.6], [0.7]]]),
+        BLOCKS,
+        HEADS,
+        (AttributeClass.SIZE,),
+    )
+
+    merged = HASM.merge([h_color, h_size])
+
+    assert merged.block_ids == BLOCKS
+    assert merged.head_ids == HEADS
+    assert merged.attributes == (AttributeClass.COLOR, AttributeClass.SIZE)
+    assert merged.score(HeadUnit(3, 0), AttributeClass.COLOR) == pytest.approx(0.9)
+    assert merged.score(HeadUnit(3, 1), AttributeClass.SIZE) == pytest.approx(0.8)
+
+
+def test_merge_rejects_empty():
+    with pytest.raises(ValueError, match="empty"):
+        HASM.merge([])
+
+
+def test_merge_rejects_block_head_mismatch():
+    h1 = HASM.uniform((1, 2), (0, 1), (AttributeClass.COLOR,))
+    h2 = HASM.uniform((1, 3), (0, 1), (AttributeClass.SIZE,))
+    with pytest.raises(ValueError, match="identical"):
+        HASM.merge([h1, h2])
+

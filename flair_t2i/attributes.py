@@ -1,5 +1,3 @@
-"""The seven attribute classes FLAIR routes, per spec section 3.1."""
-
 from enum import Enum
 
 
@@ -13,8 +11,8 @@ class AttributeClass(str, Enum):
     ACTION = "action"
 
 
-#: The four attributes used for the controllability curve (spec section 4)
-#: and the FLUX mini-BASM (spec section 3.7).
+#: The four attributes used for the controllability curve
+
 CORE_ATTRIBUTES: tuple[AttributeClass, ...] = (
     AttributeClass.IDENTITY,
     AttributeClass.COLOR,

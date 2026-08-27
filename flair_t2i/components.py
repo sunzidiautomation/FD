@@ -1,16 +1,3 @@
-"""Parsed prompt components and the explicit text-encoding batch layout.
-
-Spec section 3.5 flags an implicit batch-layout assumption
-(``base_i = B - n_rows``) as the single most dangerous implementation
-detail in FLAIR. This module removes that arithmetic entirely: row 0 is
-always the base prompt, component rows are named, and every access is
-validated.
-
-Note that this layout describes the TEXT-ENCODING batch only. Component
-streams are never stacked into the denoising batch -- see
-``flair_t2i.routing``.
-"""
-
 from dataclasses import dataclass
 
 from .attributes import AttributeClass
@@ -18,7 +5,6 @@ from .attributes import AttributeClass
 
 @dataclass(frozen=True)
 class Component:
-    """One attribute component extracted from a prompt."""
 
     id: str
     text: str
