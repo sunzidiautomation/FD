@@ -39,8 +39,10 @@ class StubPipe:
     def __init__(self):
         self.transformer = StubTransformer()
         self.calls = []
+        self.encoded: list[list[str]] = []
 
     def encode_prompt(self, prompt, prompt_2=None, prompt_3=None, **kwargs):
+        self.encoded.append(list(prompt) if isinstance(prompt, list) else [prompt])
         n = len(prompt) if isinstance(prompt, list) else 1
         return (
             torch.ones((n, SEQ, DIM)),
@@ -58,6 +60,61 @@ def _hasm():
     # 3 blocks x 2 heads x COLOR; block 0 head 1 is the single peak
     tensor = np.array([[[0.4], [0.9]], [[0.2], [0.1]], [[0.3], [0.3]]])
     return HASM(tensor, (0, 1, 2), (0, 1), (AttributeClass.COLOR,))
+
+
+def test_encode_components_caches_by_text():
+    """The text encoders are frozen, so the same phrase always encodes the same.
+
+    make_swap_generate_fn calls this once per generation, and a sweep has
+    thousands of generations over a handful of distinct phrases. Without a
+    cache, T5-XXL runs thousands of times -- and under cpu_offload each run
+    drags 9.5GB onto the GPU and back.
+    """
+    pipe = StubPipe()
+    fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())
+    component = Component(id="swap", text="a blue car", attr=AttributeClass.COLOR)
+
+    for _ in range(5):
+        fp.encode_components([component])
+
+    assert pipe.encoded == [["a blue car"]]
+
+
+def test_encode_components_encodes_each_distinct_text_once():
+    pipe = StubPipe()
+    fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())
+
+    fp.encode_components([Component(id="a", text="a red car", attr=AttributeClass.COLOR)])
+    fp.encode_components([Component(id="b", text="a blue car", attr=AttributeClass.COLOR)])
+    fp.encode_components([Component(id="c", text="a red car", attr=AttributeClass.COLOR)])
+
+    assert pipe.encoded == [["a red car"], ["a blue car"]]
+
+
+def test_encode_components_dedupes_within_one_call():
+    pipe = StubPipe()
+    fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())
+
+    fp.encode_components(
+        [
+            Component(id="a", text="a red car", attr=AttributeClass.COLOR),
+            Component(id="b", text="a red car", attr=AttributeClass.SIZE),
+        ]
+    )
+
+    assert pipe.encoded == [["a red car"]]
+
+
+def test_cached_embeddings_are_returned_per_component_id():
+    pipe = StubPipe()
+    fp = FlairPipeline(pipe, FlairConfig(device="cpu"), _hasm())
+    shared = "a red car"
+
+    first = fp.encode_components([Component(id="a", text=shared, attr=AttributeClass.COLOR)])
+    second = fp.encode_components([Component(id="b", text=shared, attr=AttributeClass.SIZE)])
+
+    assert set(first) == {"a"} and set(second) == {"b"}
+    torch.testing.assert_close(first["a"], second["b"])
 
 
 def test_encode_components_returns_one_embedding_per_component():

@@ -37,34 +37,56 @@ class FlairPipeline:
         self.granularity = granularity
         self.last_plan: RoutingPlan | None = None
         self.last_guard: CoherenceGuard | None = None
+        #: text -> embedding, already projected into transformer space. The
+        #: encoders are frozen, so a phrase always encodes the same thing.
+        #: A sweep runs thousands of generations over a handful of distinct
+        #: phrases, and under cpu_offload every encode drags T5-XXL (~9.5GB)
+        #: onto the GPU and back -- so this is the difference between
+        #: encoding 7 times and encoding 4,000 times.
+        self._embeddings: dict[str, torch.Tensor] = {}
+
+    def clear_embedding_cache(self) -> None:
+        """Drop cached text embeddings. Only needed if the encoders change."""
+        self._embeddings.clear()
 
     @torch.inference_mode()
     def encode_components(self, components: list[Component]) -> dict[str, torch.Tensor]:
-        """Encode every component's text once, batched."""
+        """Encode every component's text once, batched, and cache by text."""
         if not components:
             return {}
 
-        texts = [c.text for c in components]
-        prompt_embeds, _, _, _ = self.pipe.encode_prompt(
-            prompt=texts,
-            prompt_2=texts,
-            prompt_3=texts,
-            do_classifier_free_guidance=False,
-            max_sequence_length=self.cfg.max_sequence_length,
-        )
-        if hasattr(self.pipe, "transformer") and hasattr(
-            self.pipe.transformer, "context_embedder"
-        ):
-            embedder = self.pipe.transformer.context_embedder
-            prompt_embeds = embedder(
-                prompt_embeds.to(
-                    device=embedder.weight.device, dtype=embedder.weight.dtype
-                )
-            )
+        # dict.fromkeys keeps first-seen order while dropping repeats, so a
+        # phrase shared by two components is encoded once, not twice.
+        wanted = dict.fromkeys(c.text for c in components)
+        missing = [t for t in wanted if t not in self._embeddings]
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        return {c.id: prompt_embeds[i] for i, c in enumerate(components)}
+        if missing:
+            prompt_embeds, _, _, _ = self.pipe.encode_prompt(
+                prompt=missing,
+                prompt_2=missing,
+                prompt_3=missing,
+                do_classifier_free_guidance=False,
+                max_sequence_length=self.cfg.max_sequence_length,
+            )
+            if hasattr(self.pipe, "transformer") and hasattr(
+                self.pipe.transformer, "context_embedder"
+            ):
+                # encoder_hidden_states inside the blocks is post-embedder,
+                # so components must land in that space to be comparable.
+                embedder = self.pipe.transformer.context_embedder
+                prompt_embeds = embedder(
+                    prompt_embeds.to(
+                        device=embedder.weight.device, dtype=embedder.weight.dtype
+                    )
+                )
+
+            for i, text in enumerate(missing):
+                self._embeddings[text] = prompt_embeds[i]
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        return {c.id: self._embeddings[c.text] for c in components}
 
     @torch.inference_mode()
     def generate(
