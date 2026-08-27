@@ -8,6 +8,7 @@ from flair_t2i.attributes import AttributeClass
 from flair_t2i.calibration.corpus import ContrastivePair
 from flair_t2i.calibration.harness import SwapSpec, calibrate
 from flair_t2i.heads import HeadUnit
+from flair_t2i.metrics.integrity import IntegrityGate
 from flair_t2i.metrics.masking import RectMasker
 
 BLOCK_IDS = (0, 1, 2)
@@ -81,6 +82,64 @@ def test_insensitive_blocks_score_zero_after_normalisation():
 def test_all_scores_land_in_the_unit_interval():
     hasm = _calibrate()
     assert hasm.tensor.min() >= 0.0 and hasm.tensor.max() <= 1.0
+
+
+BROKEN_UNIT = HeadUnit(block=2, head=0)
+
+
+def _textured(seed: int, size: int = 32) -> Image.Image:
+    rng = np.random.default_rng(seed)
+    cells = rng.integers(0, 256, size=(8, 8, 3), dtype=np.uint8)
+    return Image.fromarray(cells).resize((size, size), Image.NEAREST)
+
+
+def _recoloured(image: Image.Image) -> Image.Image:
+    """Same texture, rotated channels -- a colour change, not a collapse."""
+    return Image.fromarray(np.roll(np.asarray(image), 1, axis=2))
+
+
+def _generate_with_a_broken_unit(prompt: str, seed: int, swap: SwapSpec | None):
+    """A model in which one unit destroys the frame instead of steering it."""
+    if swap is None:
+        return _textured(1)
+    if swap.units == (BROKEN_UNIT,):
+        return Image.new("RGB", (32, 32), (255, 210, 0))  # collapsed to one hue
+    if swap.units == (LIVE_UNIT,) and "blue" in swap.prompt:
+        return _recoloured(_textured(1))
+    return _textured(1)
+
+
+def test_a_destroyed_frame_outranks_everything_when_ungated():
+    """Documents the failure the gate exists to prevent.
+
+    A collapsed frame maximises 'how much did colour change', so without
+    an integrity gate the most destructive unit wins the ranking and its
+    value sets the normalisation ceiling for every honest cell.
+    """
+    hasm = _calibrate(generate_fn=_generate_with_a_broken_unit)
+    assert hasm.top_k(AttributeClass.COLOR, 1)[0][0] == BROKEN_UNIT
+
+
+def test_the_gate_rejects_the_destroyed_frame_and_the_real_unit_wins():
+    hasm = _calibrate(
+        generate_fn=_generate_with_a_broken_unit, gate=IntegrityGate()
+    )
+
+    assert hasm.top_k(AttributeClass.COLOR, 1)[0][0] == LIVE_UNIT
+    assert hasm.score(BROKEN_UNIT, AttributeClass.COLOR) == pytest.approx(0.0)
+
+
+def test_rejections_are_recorded_in_the_checkpoint(tmp_path):
+    _calibrate(
+        generate_fn=_generate_with_a_broken_unit,
+        gate=IntegrityGate(),
+        checkpoint_dir=tmp_path,
+    )
+    cell = json.loads(
+        (tmp_path / "cells" / "color_2_0.json").read_text(encoding="utf-8")
+    )
+    assert cell["rejected"] > 0
+    assert cell["samples"] == 0
 
 
 def test_baseline_is_generated_once_per_prompt_and_seed():

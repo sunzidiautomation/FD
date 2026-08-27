@@ -53,6 +53,24 @@ def test_report_is_self_contained_html(tmp_path):
     assert "http://" not in html and "https://" not in html
 
 
+def test_rejected_units_are_marked_and_not_clickable(tmp_path):
+    """A rejected cell is a destroyed frame, not a low score.
+
+    Rendering it like a zero would tell the reader 'this head does not
+    affect the attribute', when what happened is 'this head is load-bearing
+    and disturbing it broke the image'. Opposite meanings.
+    """
+    from flair_t2i.heads import HeadUnit
+
+    html = render_report(
+        _hasm(), DemoPaths(tmp_path), title="FLAIR", rejected={HeadUnit(1, 0)}
+    )
+
+    assert "rejected" in html
+    # the surviving cells still link to their images
+    assert "heads/color_b0_h0.png" in html
+
+
 def test_write_report_creates_index_html(tmp_path):
     path = write_report(_hasm(), DemoPaths(tmp_path), title="FLAIR")
     assert path == tmp_path / "index.html"

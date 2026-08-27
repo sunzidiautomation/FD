@@ -30,6 +30,7 @@ from ..attributes import AttributeClass
 from ..hasm import HASM
 from ..heads import HeadUnit
 from ..metrics.embedding import ImageTextScorer
+from ..metrics.integrity import IntegrityGate
 from ..metrics.masking import Masker
 from ..metrics.photometric import size_delta
 from ..metrics.registry import delta_for
@@ -82,7 +83,12 @@ def _load_cell(path: Path) -> float | None:
 
 
 def _save_cell(
-    path: Path, attr: AttributeClass, unit: HeadUnit, raw: float, samples: int
+    path: Path,
+    attr: AttributeClass,
+    unit: HeadUnit,
+    raw: float,
+    samples: int,
+    rejected: int = 0,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -93,6 +99,10 @@ def _save_cell(
                 "head": unit.head,
                 "raw": raw,
                 "samples": samples,
+                # samples=0 with rejected>0 means every frame collapsed --
+                # a vital head, not an insensitive one. The distinction is
+                # invisible in the matrix, so it is recorded here.
+                "rejected": rejected,
             }
         ),
         encoding="utf-8",
@@ -117,15 +127,24 @@ def _measure_cell(
     scorer: ImageTextScorer | None,
     on_pair: PairFn | None = None,
     baselines: dict[tuple[str, int], Image.Image] | None = None,
-) -> tuple[float, int]:
+    gate: IntegrityGate | None = None,
+) -> tuple[float, int, int]:
     """Mean attribute change for one (attribute, head unit), over every pair.
 
     ``baselines`` is a cache owned by :func:`calibrate` and shared across
     every cell. The base-prompt image for a given (pair, seed) is identical
     no matter which head is swapped, so generating it per cell would double
     the campaign -- ``A*P*S*units*2`` instead of ``A*P*S*(1+units)``.
+
+    ``gate`` discards samples whose generation collapsed. A destroyed frame
+    maximises every delta metric without controlling the attribute, so
+    ungated it outranks every honest result and its value becomes the
+    normalisation ceiling. See ``metrics/integrity.py``.
+
+    Returns ``(mean, kept, rejected)``.
     """
     deltas: list[float] = []
+    rejected = 0
     if baselines is None:
         baselines = {}
 
@@ -143,6 +162,11 @@ def _measure_cell(
             )
             if on_pair is not None:
                 on_pair(attr, unit, pair, seed, baseline, swapped)
+
+            if gate is not None and not gate.check(baseline, swapped).ok:
+                rejected += 1
+                continue  # a broken frame is not a measurement
+
             mask = masker(baseline, pair.object_label)
 
             if attr is AttributeClass.SIZE:
@@ -156,7 +180,7 @@ def _measure_cell(
             else:
                 deltas.append(float(metric(baseline, swapped, mask)))
 
-    return (float(np.mean(deltas)) if deltas else 0.0), len(deltas)
+    return (float(np.mean(deltas)) if deltas else 0.0), len(deltas), rejected
 
 
 def calibrate(
@@ -170,6 +194,7 @@ def calibrate(
     progress: ProgressFn | None = None,
     checkpoint_dir: str | Path | None = None,
     on_pair: PairFn | None = None,
+    gate: IntegrityGate | None = None,
 ) -> HASM:
     """Measure per-head sensitivity for every attribute in ``corpus``.
 
@@ -196,7 +221,7 @@ def calibrate(
                 if cached is not None:
                     raw[i, j, plane] = cached
                 else:
-                    value, samples = _measure_cell(
+                    value, samples, rejected = _measure_cell(
                         generate_fn,
                         attr,
                         unit,
@@ -206,6 +231,7 @@ def calibrate(
                         scorer,
                         on_pair=on_pair,
                         baselines=baselines,
+                        gate=gate,
                     )
                     raw[i, j, plane] = value
                     if checkpoint_dir is not None:
@@ -215,6 +241,7 @@ def calibrate(
                             unit,
                             value,
                             samples,
+                            rejected,
                         )
 
                 if progress is not None:

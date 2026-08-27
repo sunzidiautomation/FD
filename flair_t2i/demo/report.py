@@ -27,6 +27,8 @@ th { font: 500 11px monospace; color: #787c93; padding: 2px 4px; }
 td { padding: 0; }
 a.cell { display: block; width: 22px; height: 22px; border: 1px solid #14151e; }
 a.cell:hover { outline: 2px solid #eaeaf2; outline-offset: -2px; }
+a.cell.rejected { background: repeating-linear-gradient(45deg,
+    #2a2c3a, #2a2c3a 3px, #4a3030 3px, #4a3030 6px); }
 .scroll { overflow-x: auto; }
 """
 
@@ -40,7 +42,12 @@ def heat_color(score: float) -> str:
     return f"rgb({red}, {green}, {blue})"
 
 
-def render_report(hasm: HASM, paths: DemoPaths, title: str) -> str:
+def render_report(
+    hasm: HASM,
+    paths: DemoPaths,
+    title: str,
+    rejected: set | None = None,
+) -> str:
     parts = [
         "<!doctype html>",
         f"<title>{title}</title>",
@@ -76,6 +83,18 @@ def render_report(hasm: HASM, paths: DemoPaths, title: str) -> str:
                 unit = HeadUnit(block=block, head=head)
                 score = hasm.score(unit, attr)
                 href = paths.head_image(attr, unit).relative_to(paths.root).as_posix()
+
+                if rejected and unit in rejected:
+                    # Not a low score -- a destroyed frame. Rendering it as a
+                    # cold cell would read as "this head does not matter",
+                    # the opposite of what it means.
+                    cells.append(
+                        f'<td><a class="cell rejected" href="{href}" '
+                        f'title="block {block}, head {head} -- rejected: '
+                        f'the generation collapsed"></a></td>'
+                    )
+                    continue
+
                 cells.append(
                     f'<td><a class="cell" href="{href}" '
                     f'style="background:{heat_color(score)}" '
@@ -87,7 +106,11 @@ def render_report(hasm: HASM, paths: DemoPaths, title: str) -> str:
     return "\n".join(parts)
 
 
-def write_report(hasm: HASM, paths: DemoPaths, title: str) -> Path:
+def write_report(
+    hasm: HASM, paths: DemoPaths, title: str, rejected: set | None = None
+) -> Path:
     path = paths.root / "index.html"
-    path.write_text(render_report(hasm, paths, title), encoding="utf-8")
+    path.write_text(
+        render_report(hasm, paths, title, rejected=rejected), encoding="utf-8"
+    )
     return path
