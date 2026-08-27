@@ -170,30 +170,38 @@ def identity_delta(
     )
 
 
-def identity_target_delta(
+def target_concept_delta(
     image_a: Image.Image,
     image_b: Image.Image,
     mask: np.ndarray | None,
     scorer: ImageTextScorer,
     target_phrase: str,
 ) -> float:
-    """How much more the object resembles the concept swapped in.
+    """How much more the subject resembles the concept swapped in.
 
-    ``identity_delta`` measures distance FROM the baseline, and damage
-    maximises distance by construction -- a destroyed object is maximally
-    far from every starting point, so no gate can separate the two: they
-    are the same axis. Resemblance TO the target cannot be won that way,
-    because noise does not look like a tractor; a collapsed frame's
-    similarity to every phrase falls, so it scores zero rather than
-    maximum.
+    The damage-proof form of a delta metric, and not specific to identity.
+    ``identity_delta`` and ``action_delta`` both measure distance FROM the
+    baseline, and damage maximises distance by construction -- a destroyed
+    frame is maximally far from every starting point, so no gate can
+    separate the two: they are the same axis. Resemblance TO the target
+    cannot be won that way, because noise does not look like a tractor or
+    like a parked car; a collapsed frame's similarity to every phrase falls
+    together, so it scores zero rather than maximum.
+
+    Action is the sharper case. Its metric compares against the BASE action
+    ("a car driving"), which the real swap and the damage both reduce --
+    signal and artefact point the same way and are not separable at all.
 
     Deliberately not a difference of differences against the base phrase.
     That form counts losing sedan-ness as gaining tractor-ness, so a frame
-    that resembles nothing scores as a successful identity swap -- which is
-    the failure being fixed, reintroduced one level up.
+    resembling nothing reads as a successful swap -- the failure being
+    fixed, reintroduced one level up.
 
-    Clamped at zero: becoming less target-like is not identity control
-    toward the target.
+    Pass ``mask=None`` for scene-level attributes; action reads from the
+    whole frame, identity from the object crop.
+
+    Clamped at zero: becoming less target-like is not control toward the
+    target.
     """
     crop_a = crop_to_mask(image_a, mask)
     crop_b = crop_to_mask(image_b, mask)

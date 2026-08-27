@@ -78,12 +78,19 @@ def rescore(
         if not pairs:
             raise SystemExit(f"no corpus pairs for {attr.value}")
         mask = masker(baseline, pairs[0].object_label)
-        # The swap injected pairs[0].changed, so that is what a head
-        # controlling this attribute should have moved the object toward.
-        if attr is AttributeClass.IDENTITY and phrase is None:
-            phrase = pairs[0].changed
 
-    metric = delta_for(attr, scorer=scorer, phrase=phrase)
+    # The swap injected pairs[0].changed, so that is what a head controlling
+    # this attribute should have moved the subject toward. Identity and
+    # action both measure distance FROM the baseline otherwise, which damage
+    # maximises by construction.
+    target = None
+    if attr in (AttributeClass.IDENTITY, AttributeClass.ACTION):
+        pairs = load_corpus(DEFAULT_CORPUS_PATH).get(attr, [])
+        if pairs:
+            target = pairs[0].changed
+            phrase = phrase or pairs[0].phrase
+
+    metric = delta_for(attr, scorer=scorer, phrase=phrase, target=target)
 
     raw: dict[HeadUnit, float] = {}
     rejected: set[HeadUnit] = set()

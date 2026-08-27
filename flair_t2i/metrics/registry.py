@@ -21,8 +21,8 @@ from .embedding import (
     ImageTextScorer,
     action_delta,
     identity_delta,
-    identity_target_delta,
     style_delta,
+    target_concept_delta,
 )
 from .photometric import color_delta, lighting_delta, size_delta
 from .texture import gram_texture_delta
@@ -48,14 +48,21 @@ def delta_for(
     *,
     scorer: ImageTextScorer | None = None,
     phrase: str | None = None,
+    target: str | None = None,
 ) -> DeltaMetric:
-    """Return the delta metric for ``attr``, bound to its dependencies."""
+    """Return the delta metric for ``attr``, bound to its dependencies.
+
+    ``target`` is the concept the swap injected. Where it is given, identity
+    and action switch from "how far from the baseline" -- which damage
+    maximises by construction -- to "how close to what was swapped in",
+    which damage cannot. See ``embedding.target_concept_delta``.
+    """
     kind = DELTA_METRICS[attr]
 
     if kind in _NEEDS_SCORER and scorer is None:
         raise ValueError(f"{attr.value} needs a scorer")
-    if kind == "action" and not phrase:
-        raise ValueError(f"{attr.value} needs a phrase")
+    if kind == "action" and not (phrase or target):
+        raise ValueError(f"{attr.value} needs a phrase or a target")
 
     if kind == "color":
         return color_delta
@@ -67,12 +74,12 @@ def delta_for(
         # See the module docstring: reads 0 against one shared mask.
         return lambda a, b, mask: size_delta(a, b, mask, mask)
     if kind == "identity":
-        if phrase:
-            # A target phrase turns identity from "how far from the base"
-            # into "how close to what was swapped in" -- the form damage
-            # cannot maximise. See embedding.identity_target_delta.
-            return lambda a, b, mask: identity_target_delta(a, b, mask, scorer, phrase)
+        if target:
+            return lambda a, b, mask: target_concept_delta(a, b, mask, scorer, target)
         return lambda a, b, mask: identity_delta(a, b, mask, scorer)
     if kind == "style":
         return lambda a, b, mask: style_delta(a, b, mask, scorer)
+    if target:
+        # Action reads from the whole frame, so no crop.
+        return lambda a, b, mask: target_concept_delta(a, b, None, scorer, target)
     return lambda a, b, mask: action_delta(a, b, mask, scorer, phrase)

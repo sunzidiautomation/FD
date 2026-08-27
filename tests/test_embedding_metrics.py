@@ -7,8 +7,8 @@ from flair_t2i.metrics.embedding import (
     action_delta,
     clip_norm,
     identity_delta,
-    identity_target_delta,
     style_delta,
+    target_concept_delta,
 )
 
 FULL = np.ones((64, 64), dtype=np.float32)
@@ -187,7 +187,7 @@ def test_moving_toward_the_target_scores_above_zero():
             (20, SEDAN): 0.20, (20, TRACTOR): 0.32,  # swapped: reads as a tractor
         }
     )
-    assert identity_target_delta(
+    assert target_concept_delta(
         _grey(10), _grey(20), None, scorer, TRACTOR
     ) > 0.0
 
@@ -199,7 +199,7 @@ def test_moving_away_from_the_target_scores_zero():
             (20, SEDAN): 0.40, (20, TRACTOR): 0.10,  # even more sedan-like
         }
     )
-    assert identity_target_delta(
+    assert target_concept_delta(
         _grey(10), _grey(20), None, scorer, TRACTOR
     ) == pytest.approx(0.0)
 
@@ -218,7 +218,7 @@ def test_degradation_does_not_score_high():
             (20, SEDAN): 0.02, (20, TRACTOR): 0.02,  # resembles nothing
         }
     )
-    assert identity_target_delta(
+    assert target_concept_delta(
         _grey(10), _grey(20), None, scorer, TRACTOR
     ) == pytest.approx(0.0)
 
@@ -236,4 +236,4 @@ def test_target_metric_reads_only_inside_the_mask():
     swapped = _object_on((200, 200, 200))
     swapped.paste(Image.new("RGB", (24, 24), (255, 255, 255)), (20, 20))
 
-    assert identity_target_delta(base, swapped, mask, scorer, TRACTOR) > 0.0
+    assert target_concept_delta(base, swapped, mask, scorer, TRACTOR) > 0.0
