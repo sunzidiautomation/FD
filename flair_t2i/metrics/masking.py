@@ -63,6 +63,8 @@ class ClipSegMasker:
         self.processor = processor
         self.threshold = threshold
         self.device = device
+        if hasattr(self.model, "to"):
+            self.model.to(self.device)
 
     def __call__(self, image: Image.Image, label: str) -> np.ndarray:
         import torch

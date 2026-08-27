@@ -46,6 +46,8 @@ class ClipScorer:
         self.model = model
         self.processor = processor
         self.device = device
+        if hasattr(self.model, "to"):
+            self.model.to(self.device)
 
     def image_embedding(self, image: Image.Image) -> np.ndarray:
         import torch
