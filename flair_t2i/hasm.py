@@ -82,6 +82,42 @@ class HASM:
         )
         return ranked[: max(0, k)]
 
+    def excluding(self, units: set) -> "HASM":
+        """Zero the named units and re-normalise each attribute over the rest.
+
+        Min-max is affine, so re-scaling an already-normalised plane over a
+        subset gives exactly what re-scaling the raw plane over that subset
+        would have given. That is what lets a matrix contaminated by
+        collapsed generations be repaired from the saved images alone --
+        without re-running the metric, whose model may not even be
+        installed locally.
+
+        A dropped unit reads 0.0, which is also what an insensitive unit
+        reads. The two are distinguished in the campaign's cell records and
+        in the report, not here.
+        """
+        tensor = self.tensor.copy()
+        keep = np.ones((len(self.block_ids), len(self.head_ids)), dtype=bool)
+        for unit in units:
+            if unit.block in self._block_index and unit.head in self._head_index:
+                keep[self._block_index[unit.block], self._head_index[unit.head]] = False
+
+        for plane in range(tensor.shape[2]):
+            values = tensor[:, :, plane]
+            survivors = values[keep]
+            if survivors.size == 0:
+                tensor[:, :, plane] = 0.0
+                continue
+            low, high = float(survivors.min()), float(survivors.max())
+            rescaled = (
+                (values - low) / (high - low)
+                if high - low > 1e-12
+                else np.zeros_like(values)
+            )
+            tensor[:, :, plane] = np.where(keep, np.clip(rescaled, 0.0, 1.0), 0.0)
+
+        return HASM(tensor, self.block_ids, self.head_ids, self.attributes)
+
     def to_basm(self, reduce: str = "max") -> BASM:
         """Collapse the head axis into an ordinary block-level BASM."""
         if reduce == "max":

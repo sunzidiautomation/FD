@@ -84,6 +84,62 @@ def test_unknown_head_raises():
         _hasm().score(HeadUnit(3, 9), AttributeClass.COLOR)
 
 
+def test_excluding_zeroes_the_named_units():
+    hasm = _hasm().excluding({HeadUnit(7, 0)})
+    assert hasm.score(HeadUnit(7, 0), AttributeClass.COLOR) == pytest.approx(0.0)
+
+
+def test_excluding_promotes_the_next_best_survivor():
+    """Dropping the peak must lift the runner-up to 1.0, not leave a hole."""
+    hasm = _hasm().excluding({HeadUnit(7, 0)})
+    top, score = hasm.top_k(AttributeClass.COLOR, 1)[0]
+    assert top == HeadUnit(7, 1)  # was 0.50, the best remaining COLOR cell
+    assert score == pytest.approx(1.0)
+
+
+def test_excluding_matches_normalising_the_raw_values_directly():
+    """Re-normalising already-normalised scores is exact, not an approximation.
+
+    Min-max is affine, so rescaling the normalised plane over a subset gives
+    the same answer as rescaling the original raw plane over that subset.
+    That is what lets a contaminated matrix be repaired without recomputing
+    a metric whose model (CLIP, ClipSeg) may not even be installed.
+    """
+    raw = np.array([[[0.20], [0.80]], [[5.00], [0.50]]])  # 5.00 is corrupt
+    blocks, heads, attrs = (0, 1), (0, 1), (AttributeClass.COLOR,)
+
+    full = raw[:, :, 0]
+    normalised = (full - full.min()) / (full.max() - full.min())
+    from_normalised = HASM(
+        normalised[:, :, None], blocks, heads, attrs
+    ).excluding({HeadUnit(1, 0)})
+
+    survivors = np.array([0.20, 0.80, 0.50])
+    lo, hi = survivors.min(), survivors.max()
+    expected = {
+        HeadUnit(0, 0): (0.20 - lo) / (hi - lo),
+        HeadUnit(0, 1): (0.80 - lo) / (hi - lo),
+        HeadUnit(1, 1): (0.50 - lo) / (hi - lo),
+    }
+    for unit, want in expected.items():
+        assert from_normalised.score(unit, AttributeClass.COLOR) == pytest.approx(want)
+
+
+def test_excluding_everything_gives_a_flat_zero_plane():
+    every = {HeadUnit(b, h) for b in BLOCKS for h in HEADS}
+    hasm = _hasm().excluding(every)
+    assert hasm.tensor.max() == pytest.approx(0.0)
+
+
+def test_excluding_nothing_is_a_no_op_on_an_already_normalised_matrix():
+    """The repair path always re-normalises over the survivors. With nothing
+    excluded and a matrix that is already on [0, 1], that must change nothing
+    -- otherwise repairing a clean bundle would silently rescale it."""
+    tensor = np.array([[[0.00], [0.40]], [[1.00], [0.25]]])
+    hasm = HASM(tensor, (0, 1), (0, 1), (AttributeClass.COLOR,))
+    np.testing.assert_allclose(hasm.excluding(set()).tensor, hasm.tensor)
+
+
 def test_save_load_round_trip(tmp_path):
     original = _hasm()
     path = tmp_path / "hasm.npz"

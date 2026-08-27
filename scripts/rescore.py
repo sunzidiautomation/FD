@@ -78,9 +78,69 @@ def rescore(paths: DemoPaths, attr: AttributeClass, gate: IntegrityGate):
     return raw, rejected, reasons
 
 
+def _repair_from_matrix(paths: DemoPaths, gate: IntegrityGate, args) -> None:
+    """Gate the saved images and re-normalise the existing scores.
+
+    Keeps whatever metric produced the bundle -- it only removes cells whose
+    generation collapsed and rescales the survivors, which is the part that
+    needs no model.
+    """
+    hasm = HASM.load(paths.root / "hasm.npz")
+    reasons: dict[str, dict[str, str]] = {}
+    rejected: set[HeadUnit] = set()
+
+    for attr in hasm.attributes:
+        baseline_path = paths.baseline_image(attr)
+        if not baseline_path.exists():
+            raise SystemExit(f"missing baseline for {attr.value}: {baseline_path}")
+        baseline = Image.open(baseline_path).convert("RGB")
+
+        per_attr: dict[str, str] = {}
+        for unit, path in _units(paths, attr).items():
+            verdict = gate.check(baseline, Image.open(path).convert("RGB"))
+            if not verdict.ok:
+                rejected.add(unit)
+                per_attr[f"b{unit.block}_h{unit.head}"] = verdict.reason
+        reasons[attr.value] = per_attr
+        total = len(_units(paths, attr))
+        print(
+            f"{attr.value}: kept {total - len(per_attr)}/{total}, "
+            f"rejected {len(per_attr)}"
+        )
+
+    repaired = hasm.excluding(rejected)
+    repaired.save(paths.root / "hasm.npz")
+    (paths.root / "rejected.json").write_text(
+        json.dumps(reasons, indent=2), encoding="utf-8"
+    )
+    report = write_report(repaired, paths, title=args.title, rejected=rejected)
+
+    print(f"\nwrote {paths.root / 'hasm.npz'}")
+    print(f"wrote {paths.root / 'rejected.json'}")
+    print(f"wrote {report}\n")
+    for attr in repaired.attributes:
+        print(f"{attr.value} — top 5 after gating:")
+        for unit, score in repaired.top_k(attr, 5):
+            print(f"    B{unit.block:<3} H{unit.head:<3} {score:.3f}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument(
+        "--from-matrix",
+        action="store_true",
+        help="reuse the scores in the bundle's hasm.npz instead of recomputing "
+        "the metric, dropping collapsed cells and re-normalising over the rest. "
+        "Min-max is affine, so this is exact -- and it works for attributes "
+        "whose metric needs CLIP or ClipSeg, which are not installed locally.",
+    )
+    parser.add_argument(
+        "--attribute",
+        default=None,
+        help="attribute name, required with --from-matrix when the bundle's "
+        "baseline filename does not name it",
+    )
     parser.add_argument("--min-colour-ratio", type=float, default=0.75)
     parser.add_argument("--max-structural-change", type=float, default=0.60)
     parser.add_argument(
@@ -94,12 +154,19 @@ def main() -> None:
         max_structural_change=args.max_structural_change,
     )
 
+    if args.from_matrix:
+        _repair_from_matrix(paths, gate, args)
+        return
+
     attrs = [a for a in RESCORABLE if paths.baseline_image(a).exists()]
     if not attrs:
+        available = sorted(p.stem for p in paths.baselines.glob("*.png"))
         parser.error(
-            f"no rescorable attribute found in {args.bundle}. "
-            f"Offline rescoring supports {[a.value for a in RESCORABLE]}; "
-            "other attributes need ClipSeg/CLIP via scripts/calibrate.py."
+            f"no rescorable attribute found in {args.bundle} (baselines: "
+            f"{available}). Recomputing offline supports "
+            f"{[a.value for a in RESCORABLE]}; for anything else use "
+            "--from-matrix, which gates the saved images and re-normalises "
+            "the existing scores without needing CLIP or ClipSeg."
         )
 
     all_raw, all_rejected, all_reasons = {}, set(), {}
