@@ -62,6 +62,41 @@ def latent_to_pca_rgb(latent: torch.Tensor) -> Image.Image:
     return img.resize((256, 256), resample=Image.Resampling.NEAREST)
 
 
+def latent_to_16_channels_grid(latent: torch.Tensor) -> Image.Image:
+    """Render all 16 individual latent channels side-by-side in a 4x4 grayscale grid."""
+    feat = latent.squeeze(0).float().cpu()  # [16, H, W]
+    c, h, w = feat.shape
+
+    cell_size = 128
+    pad = 6
+    header_h = 20
+    grid_cols, grid_rows = 4, 4
+
+    total_w = pad + grid_cols * (cell_size + pad)
+    total_h = pad + grid_rows * (cell_size + header_h + pad)
+
+    canvas = Image.new("RGB", (total_w, total_h), color=(20, 20, 24))
+    draw = ImageDraw.Draw(canvas)
+
+    for i in range(16):
+        ch = feat[i]  # [H, W]
+        c_min, c_max = ch.min(), ch.max()
+        scaled = ((ch - c_min) / (c_max - c_min + 1e-8) * 255.0).numpy().astype(np.uint8)
+        ch_img = Image.fromarray(scaled).convert("RGB")
+        ch_img = ch_img.resize((cell_size, cell_size), resample=Image.Resampling.NEAREST)
+
+        row = i // grid_cols
+        col = i % grid_cols
+
+        x = pad + col * (cell_size + pad)
+        y = pad + row * (cell_size + header_h + pad)
+
+        draw.text((x + 2, y + 2), f"Channel {i:02d}", fill=(200, 200, 220))
+        canvas.paste(ch_img, (x, y + header_h))
+
+    return canvas
+
+
 def decode_latent_to_pil(pipe: StableDiffusion3Pipeline, latent: torch.Tensor) -> Image.Image:
     """Decode a latent tensor [1, 16, H, W] into a full RGB PIL Image."""
     with torch.no_grad():
@@ -203,6 +238,8 @@ def main() -> None:
         })
         pca_img.save(args.out / f"base_latent_pca_step_{step_idx:02d}.png")
         dec_img.save(args.out / f"base_decoded_step_{step_idx:02d}.png")
+        ch16_grid = latent_to_16_channels_grid(lat)
+        ch16_grid.save(args.out / f"base_16_channels_step_{step_idx:02d}.png")
 
     montage_base = make_grid_image(
         base_records,
@@ -211,6 +248,7 @@ def main() -> None:
     )
     montage_base.save(args.out / "latent_evolution_base.png")
     print(f"Wrote base montage: {args.out / 'latent_evolution_base.png'}")
+    print(f"Wrote 16-channel grids to: {args.out / 'base_16_channels_step_*.png'}")
 
     # --- Run 2: (Optional) Head Swapped Generation & Difference --------
     if args.swap_prompt:
