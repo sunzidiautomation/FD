@@ -106,6 +106,15 @@ def main() -> None:
         help="Comma-separated attribute names to calibrate (e.g. 'color' or "
         "'color,size'). Default runs all attributes.",
     )
+    parser.add_argument(
+        "--pairs",
+        "--pair-indices",
+        dest="pairs",
+        type=str,
+        default=None,
+        help="Contrastive pairs: count (e.g. '1' for first pair, '5' for all 5) or "
+        "comma/range indices (e.g. '1,2' or '1-2' for 2nd and 3rd pairs). Default runs all pairs.",
+    )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -148,6 +157,25 @@ def main() -> None:
             raise ValueError(f"no matching attributes found for {args.attributes!r}")
     else:
         corpus = raw_corpus
+
+    def _select_pairs(pair_list, spec: str | None):
+        if not spec:
+            return pair_list
+        spec = spec.strip()
+        if "," in spec:
+            indices = [int(x.strip()) for x in spec.split(",") if x.strip()]
+        elif "-" in spec:
+            start, end = map(int, spec.split("-", 1))
+            indices = list(range(start, end + 1))
+        else:
+            n = int(spec)
+            indices = list(range(min(n, len(pair_list))))
+        return [pair_list[i] for i in indices if 0 <= i < len(pair_list)]
+
+    corpus = {
+        attr: _select_pairs(pairs, args.pairs)
+        for attr, pairs in corpus.items()
+    }
 
     n_blocks = len(fp.pipe.transformer.transformer_blocks)
     n_heads = fp.pipe.transformer.transformer_blocks[0].attn.heads

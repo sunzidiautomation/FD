@@ -46,7 +46,13 @@ def main() -> None:
         "only if VRAM genuinely will not stretch.",
     )
     parser.add_argument(
-        "--pairs", type=int, default=1, help="contrastive pairs per attribute"
+        "--pairs",
+        "--pair-indices",
+        dest="pairs",
+        type=str,
+        default="1",
+        help="Contrastive pairs: count (e.g. '1' for first pair, '5' for all 5) or "
+        "comma/range indices (e.g. '1,2' or '1-2' for 2nd and 3rd pairs).",
     )
     parser.add_argument(
         "--attribute",
@@ -130,13 +136,30 @@ def main() -> None:
         if not raw_corpus:
             raise ValueError(f"no matching attributes found for {args.attributes!r}")
 
+    def _select_pairs(pair_list, spec: str):
+        spec = spec.strip()
+        if "," in spec:
+            indices = [int(x.strip()) for x in spec.split(",") if x.strip()]
+        elif "-" in spec:
+            start, end = map(int, spec.split("-", 1))
+            indices = list(range(start, end + 1))
+        else:
+            n = int(spec)
+            indices = list(range(min(n, len(pair_list))))
+        return [pair_list[i] for i in indices if 0 <= i < len(pair_list)]
+
     corpus = {
-        attr: pairs[: args.pairs]
+        attr: _select_pairs(pairs, args.pairs)
         for attr, pairs in raw_corpus.items()
     }
-    total = len(corpus) * args.pairs * (1 + len(block_ids) * len(head_ids))
+    total_pairs = sum(len(p) for p in corpus.values())
+    total = sum(len(p) * (1 + len(block_ids) * len(head_ids)) for p in corpus.values())
     print(f"{len(block_ids)} blocks {block_ids} x {len(head_ids)} heads = {len(block_ids) * len(head_ids)} units")
-    print(f"{len(corpus)} attribute(s) {[a.value for a in corpus]} x {args.pairs} pair(s) -- {total} generations\n")
+    print(f"{len(corpus)} attribute(s) {[a.value for a in corpus]} -- {total_pairs} pair(s) total ({total} generations):")
+    for attr, p_list in corpus.items():
+        for idx, p in enumerate(p_list):
+            print(f"  [{attr.value} #{idx}] '{p.base}' -> '{p.changed}'")
+    print()
 
     hasm = run_demo_sweep(
         make_swap_generate_fn(fp, steps=args.steps),
