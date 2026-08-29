@@ -99,3 +99,65 @@ def test_identity_target_overrides_the_distance_form():
     )
     dark = Image.new("RGB", (32, 32), (10, 10, 10))  # degraded: resembles less
     assert metric(Image.new("RGB", (32, 32), (200, 200, 200)), dark, None) == 0.0
+
+
+def test_color_with_a_target_uses_the_directed_metric():
+    """Without a target colour, colour is measured as distance FROM the
+    baseline -- which a tone shift maximises without recolouring anything."""
+    mask = np.ones((32, 32), dtype=np.float32)
+    red, blue = Image.new("RGB", (32, 32), (220, 30, 30)), Image.new(
+        "RGB", (32, 32), (0, 0, 255)
+    )
+    warm = Image.new("RGB", (32, 32), (200, 90, 40))
+
+    directed = delta_for(AttributeClass.COLOR, target="blue")
+    assert directed(red, blue, mask) == pytest.approx(1.0)
+    assert directed(red, warm, mask) == pytest.approx(0.0)
+
+    undirected = delta_for(AttributeClass.COLOR)
+    assert undirected(red, warm, mask) > 0.0, "the old metric rewards the wash"
+
+
+def test_color_rejects_a_target_that_is_not_a_colour_name():
+    with pytest.raises(ValueError, match="not a known colour"):
+        delta_for(AttributeClass.COLOR, target="tractor")
+
+
+# ------------------------------------- what a pair says the swap injected
+
+
+def _pair(base, changed, label="sports car", phrase=None):
+    from flair_t2i.calibration.corpus import ContrastivePair
+
+    return ContrastivePair(
+        base=base, changed=changed, object_label=label, phrase=phrase
+    )
+
+
+def test_target_for_colour_is_the_colour_word():
+    from flair_t2i.metrics.registry import target_for
+
+    pair = _pair("a red sports car on a road", "a blue sports car on a road")
+    assert target_for(AttributeClass.COLOR, pair) == "blue"
+
+
+def test_target_for_identity_is_the_whole_changed_phrase():
+    from flair_t2i.metrics.registry import target_for
+
+    pair = _pair("a sedan on a road", "a tractor on a road")
+    assert target_for(AttributeClass.IDENTITY, pair) == "a tractor on a road"
+
+
+def test_target_for_colour_is_none_when_the_word_is_not_a_colour():
+    """Falls back to the undirected metric rather than raising mid-sweep."""
+    from flair_t2i.metrics.registry import target_for
+
+    pair = _pair("a small sports car", "a large sports car")
+    assert target_for(AttributeClass.COLOR, pair) is None
+
+
+def test_target_for_a_photometric_attribute_is_none():
+    from flair_t2i.metrics.registry import target_for
+
+    pair = _pair("a car in warm light", "a car in cool light")
+    assert target_for(AttributeClass.LIGHTING, pair) is None

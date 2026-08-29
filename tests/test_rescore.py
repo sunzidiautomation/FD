@@ -146,3 +146,39 @@ def test_size_is_gated_on_the_whole_frame(tmp_path):
     similarity would reject exactly the successful swaps.
     """
     assert _region(tmp_path, AttributeClass.SIZE) == ((SIDE, SIDE), (SIDE, SIDE))
+
+
+# ------------------------------------------- colour, aimed at the swapped word
+
+
+def _object(background, obj, box=BOX):
+    image = Image.new("RGB", (SIDE, SIDE), background)
+    image.paste(Image.new("RGB", (box[2] - box[0], box[3] - box[1]), obj), box[:2])
+    return image
+
+
+def test_colour_is_measured_toward_the_colour_the_swap_named(tmp_path):
+    """The corpus swaps "red" for "blue", so blue is what to measure toward.
+
+    Distance FROM the baseline is maximised by a global tone shift that
+    leaves the object its original colour. That is what topped a real
+    576-cell colour sweep: a sepia-washed frame whose car was still red.
+    """
+    bluer, washed = HeadUnit(0, 0), HeadUnit(0, 1)
+    paths = DemoPaths(tmp_path / "bundle")
+
+    _object(BASE_BG, (220, 30, 30)).save(paths.baseline_image(AttributeClass.COLOR))
+    _object(BASE_BG, (0, 0, 255)).save(
+        paths.head_image(AttributeClass.COLOR, bluer)
+    )
+    # the whole frame warmer, the object still red
+    _object((90, 60, 20), (200, 90, 40)).save(
+        paths.head_image(AttributeClass.COLOR, washed)
+    )
+
+    raw, _, _ = rescore_mod.rescore(
+        paths, AttributeClass.COLOR, RecordingGate(), masker=_masker
+    )
+
+    assert raw[bluer] > 0.9, "a blue object is the swap succeeding"
+    assert raw[washed] == pytest.approx(0.0), "a warm wash is not colour control"

@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -6,6 +7,7 @@ from flair_t2i.calibration.corpus import ContrastivePair
 from flair_t2i.calibration.harness import SwapSpec
 from flair_t2i.demo.sweep import DemoPaths, run_demo_sweep
 from flair_t2i.heads import HeadUnit
+from flair_t2i.metrics.integrity import IntegrityGate
 from flair_t2i.metrics.masking import RectMasker
 
 BLOCK_IDS = (0, 1)
@@ -125,3 +127,49 @@ def test_head_image_path_is_stable(tmp_path):
     paths = DemoPaths(tmp_path)
     got = paths.head_image(AttributeClass.COLOR, HeadUnit(3, 7))
     assert got == tmp_path / "heads" / "color_b3_h7.png"
+
+
+def test_the_sweep_gates_the_frames_it_scores(tmp_path):
+    """demo.py prints "peaks at B.. H.." straight from this sweep's HASM.
+
+    Ungated that line names whichever unit broke the picture hardest, and
+    it is the line a reader trusts. The images are still written for every
+    unit -- on_pair fires before the gate -- so a rejected cell can still
+    be looked at and rescored.
+    """
+    broken = HeadUnit(block=1, head=0)
+    live = HeadUnit(block=0, head=1)
+
+    def generate(prompt, seed, swap=None):
+        if swap is None:
+            return _textured(0)
+        if swap.units == (broken,):
+            return Image.new("RGB", (32, 32), (255, 210, 0))
+        if swap.units == (live,):
+            return Image.new("RGB", (32, 32), (40, 40, 210))
+        return _textured(0)
+
+    paths = DemoPaths(tmp_path / "bundle")
+    hasm = run_demo_sweep(
+        generate,
+        corpus={
+            AttributeClass.LIGHTING: [
+                ContrastivePair("a car in warm light", "a car in cool light", "car")
+            ]
+        },
+        block_ids=(0, 1),
+        head_ids=(0, 1),
+        masker=RectMasker((0.0, 0.0, 1.0, 1.0)),
+        paths=paths,
+        seeds=[0],
+        gate=IntegrityGate(),
+    )
+
+    assert hasm.score(broken, AttributeClass.LIGHTING) == pytest.approx(0.0)
+    assert paths.head_image(AttributeClass.LIGHTING, broken).exists()
+
+
+def _textured(seed: int, size: int = 32) -> Image.Image:
+    rng = np.random.default_rng(seed)
+    cells = rng.integers(0, 256, size=(8, 8, 3), dtype=np.uint8)
+    return Image.fromarray(cells).resize((size, size), Image.NEAREST)

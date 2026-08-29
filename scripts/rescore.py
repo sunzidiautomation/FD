@@ -40,7 +40,7 @@ from flair_t2i.heads import HeadUnit
 from flair_t2i.metrics.embedding import crop_to_mask
 from flair_t2i.metrics.integrity import IntegrityGate
 from flair_t2i.metrics.photometric import size_delta
-from flair_t2i.metrics.registry import OBJECT_LEVEL, delta_for
+from flair_t2i.metrics.registry import OBJECT_LEVEL, delta_for, target_for
 
 #: Attributes whose metric ignores the mask and needs no scorer, so the
 #: offline number is identical to the campaign's.
@@ -85,13 +85,12 @@ def rescore(
     if attr is AttributeClass.SIZE and masker is None:
         raise SystemExit("size needs --with-clip: its metric must re-segment each image")
 
-    # The swap injected pairs[0].changed, so that is what a head controlling
-    # this attribute should have moved the subject toward. Identity and
-    # action both measure distance FROM the baseline otherwise, which damage
-    # maximises by construction.
-    target = None
-    if attr in (AttributeClass.IDENTITY, AttributeClass.ACTION) and pairs:
-        target = pairs[0].changed
+    # What a head controlling this attribute should have moved the subject
+    # toward. Without it the metrics ask "how far from the baseline", which
+    # damage maximises by construction. Shared with the harness so a sweep
+    # and a rescore of that sweep cannot measure toward different things.
+    target = target_for(attr, pairs[0]) if pairs else None
+    if attr is AttributeClass.ACTION and pairs:
         phrase = phrase or pairs[0].phrase
 
     metric = delta_for(attr, scorer=scorer, phrase=phrase, target=target)

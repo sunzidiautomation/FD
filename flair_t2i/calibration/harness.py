@@ -33,7 +33,7 @@ from ..metrics.embedding import ImageTextScorer
 from ..metrics.integrity import IntegrityGate
 from ..metrics.masking import Masker
 from ..metrics.photometric import size_delta
-from ..metrics.registry import delta_for
+from ..metrics.registry import delta_for, target_for
 from .corpus import ContrastivePair
 
 
@@ -149,7 +149,12 @@ def _measure_cell(
         baselines = {}
 
     for pair in pairs:
-        metric = delta_for(attr, scorer=scorer, phrase=pair.phrase)
+        metric = delta_for(
+            attr,
+            scorer=scorer,
+            phrase=pair.phrase,
+            target=target_for(attr, pair),
+        )
         for seed in seeds:
             key = (pair.base, seed)
             if key not in baselines:

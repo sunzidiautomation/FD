@@ -94,8 +94,15 @@ def _textured(seed: int, size: int = 32) -> Image.Image:
 
 
 def _recoloured(image: Image.Image) -> Image.Image:
-    """Same texture, rotated channels -- a colour change, not a collapse."""
-    return Image.fromarray(np.roll(np.asarray(image), 1, axis=2))
+    """Same texture, shifted toward blue -- a colour change, not a collapse.
+
+    Toward blue specifically, because the corpus pair swaps "red" for
+    "blue" and colour is now measured toward the word the swap named.
+    """
+    array = np.asarray(image).astype(np.int16)
+    array[..., 2] = np.clip(array[..., 2] + 90, 0, 255)
+    array[..., 0] = np.clip(array[..., 0] - 60, 0, 255)
+    return Image.fromarray(array.astype(np.uint8))
 
 
 def _generate_with_a_broken_unit(prompt: str, seed: int, swap: SwapSpec | None):
@@ -112,18 +119,42 @@ def _generate_with_a_broken_unit(prompt: str, seed: int, swap: SwapSpec | None):
 def test_a_destroyed_frame_outranks_everything_when_ungated():
     """Documents the failure the gate exists to prevent.
 
-    A collapsed frame maximises 'how much did colour change', so without
-    an integrity gate the most destructive unit wins the ranking and its
-    value sets the normalisation ceiling for every honest cell.
+    A collapsed frame maximises 'how much did this attribute change', so
+    without an integrity gate the most destructive unit wins the ranking
+    and its value sets the normalisation ceiling for every honest cell.
+
+    Shown on lighting, which asks how far the warm/cool balance moved and
+    has no target to aim at. Colour no longer reaches this failure -- it
+    is measured toward the word the swap named, and a yellow collapse is
+    not closer to blue -- but every metric without a target still does.
     """
-    hasm = _calibrate(generate_fn=_generate_with_a_broken_unit)
-    assert hasm.top_k(AttributeClass.COLOR, 1)[0][0] == BROKEN_UNIT
+    hasm = _calibrate(
+        corpus=_corpus(attr=AttributeClass.LIGHTING),
+        generate_fn=_generate_with_a_broken_unit,
+    )
+    assert hasm.top_k(AttributeClass.LIGHTING, 1)[0][0] == BROKEN_UNIT
 
 
 def test_the_gate_rejects_the_destroyed_frame_and_the_real_unit_wins():
     hasm = _calibrate(
-        generate_fn=_generate_with_a_broken_unit, gate=IntegrityGate()
+        corpus=_corpus(attr=AttributeClass.LIGHTING),
+        generate_fn=_generate_with_a_broken_unit,
+        gate=IntegrityGate(),
     )
+
+    assert hasm.top_k(AttributeClass.LIGHTING, 1)[0][0] == LIVE_UNIT
+    assert hasm.score(BROKEN_UNIT, AttributeClass.LIGHTING) == pytest.approx(0.0)
+
+
+def test_a_directed_metric_refuses_the_destroyed_frame_without_any_gate():
+    """The stronger guarantee, and why colour was pointed at a target.
+
+    The gate is a filter bolted on in front of the metric, and a filter
+    can always be slipped past -- the confetti frame passed two of its
+    three signals. A metric that asks "how much closer to blue" cannot be
+    won by destruction at all, because a collapse is not blue.
+    """
+    hasm = _calibrate(generate_fn=_generate_with_a_broken_unit)
 
     assert hasm.top_k(AttributeClass.COLOR, 1)[0][0] == LIVE_UNIT
     assert hasm.score(BROKEN_UNIT, AttributeClass.COLOR) == pytest.approx(0.0)
@@ -280,3 +311,40 @@ def test_checkpoint_records_the_raw_value_not_the_normalised_one(tmp_path):
     assert cell["head"] == LIVE_UNIT.head
     assert 0.0 < cell["raw"] <= 1.0
     assert cell["samples"] == 2
+
+
+def test_measure_cell_aims_colour_at_the_swapped_in_word():
+    """A sweep must use the directed metric too, not only rescoring.
+
+    Otherwise every fresh campaign reproduces the contamination that
+    rescoring then has to undo: a global tone shift maximises distance
+    FROM the baseline's colour without recolouring the object.
+    """
+    pytest.importorskip("skimage")
+    from flair_t2i.calibration.corpus import ContrastivePair
+    from flair_t2i.calibration.harness import _measure_cell
+    from flair_t2i.heads import HeadUnit
+
+    pair = ContrastivePair(
+        base="a red sports car on a road",
+        changed="a blue sports car on a road",
+        object_label="sports car",
+    )
+    baseline = Image.new("RGB", (32, 32), (220, 30, 30))
+    washed = Image.new("RGB", (32, 32), (200, 90, 40))  # warmer, still red
+
+    def generate(prompt, seed, swap=None):
+        return baseline if swap is None else washed
+
+    mean, kept, rejected = _measure_cell(
+        generate,
+        attr=AttributeClass.COLOR,
+        unit=HeadUnit(0, 0),
+        pairs=[pair],
+        seeds=[0],
+        masker=lambda image, label: np.ones((32, 32), dtype=np.float32),
+        scorer=None,
+    )
+
+    assert kept == 1 and rejected == 0
+    assert mean == pytest.approx(0.0), "a warm wash is not colour control"

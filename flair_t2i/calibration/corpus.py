@@ -14,6 +14,7 @@ different object in ``changed``; the label describes ``base``.
 from __future__ import annotations
 
 import json
+import string
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,12 +29,35 @@ DEFAULT_CORPUS_PATH = (
 MIN_PAIRS_PER_ATTRIBUTE = 5
 
 
+def _words(text: str) -> list[str]:
+    return [word.strip(string.punctuation) for word in text.lower().split()]
+
+
 @dataclass(frozen=True)
 class ContrastivePair:
     base: str
     changed: str
     object_label: str
     phrase: str | None = None
+
+    @property
+    def changed_word(self) -> str | None:
+        """The single word ``changed`` introduces, or None if that is unclear.
+
+        ``validate_corpus`` already guarantees exactly one word of
+        difference, and that word names what the swap injected -- "blue"
+        out of "a blue sports car on a road". A target-directed metric
+        needs it to know what to measure toward.
+
+        None rather than a guess when two words differ or the lengths do:
+        attributing an image change to the wrong word is the failure the
+        one-word invariant exists to prevent.
+        """
+        base, changed = _words(self.base), _words(self.changed)
+        if len(base) != len(changed):
+            return None
+        differing = [c for b, c in zip(base, changed) if b != c]
+        return differing[0] if len(differing) == 1 else None
 
 
 def load_corpus(path: str | Path) -> dict[AttributeClass, list[ContrastivePair]]:

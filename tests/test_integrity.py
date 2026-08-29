@@ -94,7 +94,7 @@ def test_thresholds_are_configurable():
 
     assert not IntegrityGate(max_structural_change=0.1).check(image, scrambled).ok
     assert IntegrityGate(
-        max_structural_change=1.5, min_colour_ratio=0.0
+        max_structural_change=1.5, min_colour_ratio=0.0, max_speckle_ratio=1e9
     ).check(image, scrambled).ok
 
 
@@ -103,3 +103,104 @@ def test_a_black_baseline_does_not_divide_by_zero():
     must not raise."""
     verdict = IntegrityGate().check(_flat((0, 0, 0)), _rich())
     assert isinstance(verdict.ok, bool)
+
+
+# --------------------------------------------------------------- speckle
+#
+# The third failure mode, found in a real action sweep: the top-ranked
+# frame was a car buried in mottled multicoloured specks. It passed both
+# original signals -- the specks are colourful, so spread survived at
+# 0.91, and the layout was untouched, so 1-SSIM stayed at 0.30. Neither
+# signal looks at anything smaller than the whole frame.
+
+from flair_t2i.metrics.integrity import speckle  # noqa: E402
+
+
+def _scene(side=128, texture=0.0, seed=7):
+    """A gradient with solid blocks, optionally over fine grain.
+
+    ``texture`` stands in for the grain any real photograph carries. With
+    none, the speckle ratio against a noised copy is absurdly large, which
+    would prove the mechanism works but say nothing about whether the
+    default threshold is set anywhere near the right place.
+    """
+    rng = np.random.default_rng(seed)
+    row = np.linspace(20, 200, side)
+    plane = np.repeat(row[None, :], side, axis=0)
+    array = np.stack([plane, plane * 0.7, plane * 0.4], axis=-1)
+    array[20:60, 20:60] = (200, 40, 40)
+    array[70:110, 60:120] = (30, 80, 160)
+    if texture:
+        array = array + rng.normal(0.0, texture, array.shape)
+    return Image.fromarray(np.clip(array, 0, 255).astype(np.uint8), "RGB")
+
+
+def _specked(image, fraction=0.04, seed=0):
+    """Salt-and-pepper in colour: isolated pixels, layout untouched."""
+    rng = np.random.default_rng(seed)
+    array = np.asarray(image.convert("RGB")).copy()
+    hit = rng.random(array.shape[:2]) < fraction
+    array[hit] = rng.integers(0, 256, size=(int(hit.sum()), 3), dtype=np.uint8)
+    return Image.fromarray(array, "RGB")
+
+
+def test_speckle_is_near_zero_for_a_smooth_image():
+    assert speckle(_scene()) < 0.01
+
+
+def test_speckle_rises_with_isolated_noisy_pixels():
+    smooth = _scene()
+    assert speckle(_specked(smooth)) > 5 * speckle(smooth)
+
+
+def test_a_genuine_sharp_edge_is_not_speckle():
+    """The discriminating property.
+
+    Removing motion blur -- a legitimate outcome for an action swap --
+    raises high-frequency energy, so plain sharpness cannot be the signal.
+    A median filter erases isolated pixels and preserves edges, so the
+    deviation from it separates the two.
+    """
+    edged = np.zeros((128, 128, 3), dtype=np.uint8)
+    edged[:, 64:] = 255
+    assert speckle(Image.fromarray(edged, "RGB")) < 0.01
+
+
+def test_gate_rejects_speckle_that_both_original_signals_miss():
+    """The exact shape of the bug, at a realistic magnitude.
+
+    Grain in the baseline keeps the ratio near what the real confetti
+    frame scored (1.92), so this pins the default threshold and not just
+    the mechanism.
+    """
+    baseline = _scene(texture=6.0)
+    candidate = _specked(baseline)
+
+    loose = IntegrityGate(max_speckle_ratio=1e9).check(baseline, candidate)
+    assert loose.ok, "premise: the two original signals both pass this frame"
+    assert loose.colour_ratio >= 0.75
+    assert loose.structural_change <= 0.60
+    assert 1.5 < loose.speckle_ratio < 3.0, "premise: a realistic speckle ratio"
+
+    verdict = IntegrityGate().check(baseline, candidate)
+    assert not verdict.ok
+    assert "speckle" in verdict.reason
+
+
+def test_gate_accepts_a_change_that_adds_no_speckle():
+    baseline = _scene(texture=6.0)
+    shifted = Image.fromarray(
+        np.clip(np.asarray(baseline, dtype=np.int16) + 25, 0, 255).astype(np.uint8),
+        "RGB",
+    )
+    assert IntegrityGate().check(baseline, shifted).ok
+
+
+def test_verdict_reports_the_speckle_ratio():
+    scene = _scene(texture=6.0)
+    assert IntegrityGate().check(scene, scene).speckle_ratio == pytest.approx(1.0)
+
+
+def test_a_speckle_free_baseline_does_not_divide_by_zero():
+    flat = _flat((10, 10, 10), size=128)
+    assert isinstance(IntegrityGate().check(flat, _scene(texture=6.0)).ok, bool)

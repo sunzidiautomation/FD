@@ -95,3 +95,52 @@ def test_validate_rejects_a_pair_of_different_lengths(corpus):
 def test_corpus_file_is_valid_json():
     with open(DEFAULT_CORPUS_PATH, encoding="utf-8") as handle:
         json.load(handle)
+
+
+# --------------------------------------------------- the one word that differs
+#
+# validate_corpus already enforces exactly one word of difference. That
+# word names what the swap injected, which is what a target-directed
+# metric needs -- "blue" out of "a blue sports car on a road".
+
+
+def test_changed_word_is_the_one_that_differs():
+    pair = ContrastivePair(
+        base="a red sports car on a road",
+        changed="a blue sports car on a road",
+        object_label="sports car",
+    )
+    assert pair.changed_word == "blue"
+
+
+def test_changed_word_ignores_case_and_punctuation():
+    pair = ContrastivePair(
+        base="A Red sports car.", changed="A Blue sports car.", object_label="car"
+    )
+    assert pair.changed_word == "blue"
+
+
+def test_changed_word_is_none_when_the_lengths_differ():
+    pair = ContrastivePair(
+        base="a red car", changed="a red sports car", object_label="car"
+    )
+    assert pair.changed_word is None
+
+
+def test_changed_word_is_none_when_two_words_differ():
+    """Deliberately silent rather than guessing which change to attribute."""
+    pair = ContrastivePair(
+        base="a red small car", changed="a blue large car", object_label="car"
+    )
+    assert pair.changed_word is None
+
+
+def test_every_shipped_colour_pair_names_a_colour():
+    """The metric can only be directed if the corpus actually names a hue."""
+    from PIL import ImageColor
+
+    from flair_t2i.attributes import AttributeClass
+
+    pairs = load_corpus(DEFAULT_CORPUS_PATH)[AttributeClass.COLOR]
+    for pair in pairs:
+        assert pair.changed_word in ImageColor.colormap, pair.changed

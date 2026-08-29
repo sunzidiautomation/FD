@@ -31,6 +31,16 @@ def _lab(rgb: np.ndarray) -> np.ndarray:
     return skcolor.rgb2lab((np.asarray(rgb, dtype=np.float64) / 255.0).reshape(1, 1, 3)).reshape(3)
 
 
+def colour_reference(name: str) -> tuple[int, int, int]:
+    """The sRGB triple for a colour name, raising on anything else."""
+    from PIL import ImageColor
+
+    try:
+        return ImageColor.getrgb(name)
+    except ValueError as exc:
+        raise ValueError(f"{name!r} is not a known colour name") from exc
+
+
 def size_absolute(image: Image.Image, mask: np.ndarray) -> float:
     """Object mask area ratio -- the SIZE universe."""
     return mask_area_ratio(mask)
@@ -68,6 +78,41 @@ def lighting_delta(
 ) -> float:
     """Shift in warm/cool balance. ``mask`` is accepted and ignored."""
     return float(abs(warmth_absolute(image_a) - warmth_absolute(image_b)))
+
+
+def target_colour_delta(
+    image_a: Image.Image,
+    image_b: Image.Image,
+    mask: np.ndarray,
+    target_colour: str,
+) -> float:
+    """How much of the way the object's colour moved toward a named colour.
+
+    The damage-proof form of ``color_delta``, and the reason it is needed:
+    dE FROM the baseline is maximised by anything that shifts the object's
+    mean colour, and a global tone shift does that without recolouring the
+    object. A real sweep's top three colour cells were a sepia-washed
+    frame, a reoriented car and a recomposed scene -- every one of them
+    still red.
+
+    Colour is the attribute where this fix is exact rather than
+    approximate: the swapped-in word names a fixed point in Lab, so
+    "closer to blue" is a measurement rather than a judgement. Contrast
+    ``embedding.target_concept_delta``, which has to ask CLIP.
+
+    Clamped at zero: becoming less blue is not control toward blue.
+    """
+    mean_a = masked_mean_rgb(image_a, mask)
+    mean_b = masked_mean_rgb(image_b, mask)
+    if mean_a is None or mean_b is None:
+        return 0.0
+
+    target = _lab(colour_reference(target_colour))
+    before = float(np.linalg.norm(_lab(mean_a) - target))
+    after = float(np.linalg.norm(_lab(mean_b) - target))
+    if before <= 1e-9:
+        return 0.0
+    return float(np.clip((before - after) / before, 0.0, 1.0))
 
 
 def color_delta(image_a: Image.Image, image_b: Image.Image, mask: np.ndarray) -> float:

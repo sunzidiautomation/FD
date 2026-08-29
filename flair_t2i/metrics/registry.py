@@ -24,7 +24,13 @@ from .embedding import (
     style_delta,
     target_concept_delta,
 )
-from .photometric import color_delta, lighting_delta, size_delta
+from .photometric import (
+    color_delta,
+    colour_reference,
+    lighting_delta,
+    size_delta,
+    target_colour_delta,
+)
 from .texture import gram_texture_delta
 
 DeltaMetric = Callable[[Image.Image, Image.Image, np.ndarray], float]
@@ -55,6 +61,24 @@ OBJECT_LEVEL: frozenset = frozenset(
 _NEEDS_SCORER = {"identity", "style", "action"}
 
 
+def target_for(attr: AttributeClass, pair) -> str | None:
+    """What ``pair`` injected, in the form ``delta_for`` wants for ``attr``.
+
+    One place, so a sweep and a rescore of that sweep cannot disagree
+    about what they were measuring toward.
+    """
+    if attr in (AttributeClass.IDENTITY, AttributeClass.ACTION):
+        return pair.changed
+    if attr is AttributeClass.COLOR:
+        from PIL import ImageColor
+
+        word = pair.changed_word
+        # None rather than raising: a corpus that stops naming a hue there
+        # should fall back to the undirected metric, not abort the sweep.
+        return word if word and word in ImageColor.colormap else None
+    return None
+
+
 def delta_for(
     attr: AttributeClass,
     *,
@@ -64,10 +88,16 @@ def delta_for(
 ) -> DeltaMetric:
     """Return the delta metric for ``attr``, bound to its dependencies.
 
-    ``target`` is the concept the swap injected. Where it is given, identity
-    and action switch from "how far from the baseline" -- which damage
+    ``target`` is the concept the swap injected. Where it is given, a
+    metric switches from "how far from the baseline" -- which damage
     maximises by construction -- to "how close to what was swapped in",
-    which damage cannot. See ``embedding.target_concept_delta``.
+    which damage cannot.
+
+    For colour it is the colour word, naming a fixed point in Lab, so the
+    measurement is exact. For identity and action it is the changed
+    phrase and CLIP judges the resemblance, which holds only while the
+    target names something damage cannot add: "a tractor" qualifies,
+    "parked" does not, being largely the absence of a motion cue.
     """
     kind = DELTA_METRICS[attr]
 
@@ -77,6 +107,11 @@ def delta_for(
         raise ValueError(f"{attr.value} needs a phrase or a target")
 
     if kind == "color":
+        if target:
+            # Bound eagerly so an unusable target fails at wiring time, not
+            # 576 cells into a sweep.
+            colour_reference(target)
+            return lambda a, b, mask: target_colour_delta(a, b, mask, target)
         return color_delta
     if kind == "lighting":
         return lighting_delta

@@ -28,6 +28,7 @@ from flair_t2i.demo.report import write_report
 from flair_t2i.demo.sweep import DemoPaths, run_demo_sweep
 from flair_t2i.hasm import HASM
 from flair_t2i.metrics.embedding import ClipScorer
+from flair_t2i.metrics.integrity import IntegrityGate
 from flair_t2i.metrics.masking import ClipSegMasker
 from flair_t2i.pipeline import FlairPipeline
 
@@ -145,6 +146,7 @@ def main() -> None:
         masker=ClipSegMasker(device=args.metric_device),
         paths=DemoPaths(args.out),
         seeds=[args.seed],
+        gate=IntegrityGate(),
         scorer=ClipScorer(device=args.metric_device),
         progress=lambda attr, unit, value: print(
             f"  {attr.value:<9} B{unit.block:<3}H{unit.head:<3} raw={value:.4f}"

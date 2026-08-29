@@ -67,6 +67,7 @@ def run_demo_sweep(
     seeds: list[int],
     scorer=None,
     progress=None,
+    gate=None,
 ) -> HASM:
     """Sweep every head unit, keeping every image, and return the HASM."""
 
@@ -87,6 +88,7 @@ def run_demo_sweep(
         progress=progress,
         checkpoint_dir=None,
         on_pair=on_pair,
+        gate=gate,
     )
 
     # Block-level counterpart: the same swap with every head of a block
