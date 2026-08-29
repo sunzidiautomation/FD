@@ -40,6 +40,18 @@ DELTA_METRICS: dict[AttributeClass, str] = {
     AttributeClass.ACTION: "action",
 }
 
+#: Attributes whose delta metric reads ONLY inside the object mask. The rest
+#: read the whole frame, so anything that has to match "the region this
+#: metric measures" -- the integrity gate above all -- must branch on this,
+#: not on whether a mask happens to be available.
+#:
+#: SIZE is deliberately absent though it is an object attribute: it compares
+#: two segmentations of two whole frames, and its object changes extent by
+#: design, so there is no fixed region to confine a check to.
+OBJECT_LEVEL: frozenset = frozenset(
+    {AttributeClass.COLOR, AttributeClass.TEXTURE, AttributeClass.IDENTITY}
+)
+
 _NEEDS_SCORER = {"identity", "style", "action"}
 
 

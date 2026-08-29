@@ -39,7 +39,8 @@ from flair_t2i.hasm import HASM
 from flair_t2i.heads import HeadUnit
 from flair_t2i.metrics.embedding import crop_to_mask
 from flair_t2i.metrics.integrity import IntegrityGate
-from flair_t2i.metrics.registry import delta_for
+from flair_t2i.metrics.photometric import size_delta
+from flair_t2i.metrics.registry import OBJECT_LEVEL, delta_for
 
 #: Attributes whose metric ignores the mask and needs no scorer, so the
 #: offline number is identical to the campaign's.
@@ -69,28 +70,39 @@ def rescore(
     """Return (raw scores by unit, rejected units, rejection reasons)."""
     baseline = Image.open(paths.baseline_image(attr)).convert("RGB")
 
-    # identity crops to this; the scene-level metrics ignore it. The label
-    # has to be the corpus's own -- segmenting for "object" instead of
-    # "sedan" would crop to whatever ClipSeg guessed, silently.
+    pairs = load_corpus(DEFAULT_CORPUS_PATH).get(attr, [])
+
+    # The label has to be the corpus's own -- segmenting for "object" instead
+    # of "sports car" would crop to whatever ClipSeg guessed, silently.
     mask = None
+    object_label = None
     if masker is not None:
-        pairs = load_corpus(DEFAULT_CORPUS_PATH).get(attr, [])
         if not pairs:
             raise SystemExit(f"no corpus pairs for {attr.value}")
-        mask = masker(baseline, pairs[0].object_label)
+        object_label = pairs[0].object_label
+        mask = masker(baseline, object_label)
+
+    if attr is AttributeClass.SIZE and masker is None:
+        raise SystemExit("size needs --with-clip: its metric must re-segment each image")
 
     # The swap injected pairs[0].changed, so that is what a head controlling
     # this attribute should have moved the subject toward. Identity and
     # action both measure distance FROM the baseline otherwise, which damage
     # maximises by construction.
     target = None
-    if attr in (AttributeClass.IDENTITY, AttributeClass.ACTION):
-        pairs = load_corpus(DEFAULT_CORPUS_PATH).get(attr, [])
-        if pairs:
-            target = pairs[0].changed
-            phrase = phrase or pairs[0].phrase
+    if attr in (AttributeClass.IDENTITY, AttributeClass.ACTION) and pairs:
+        target = pairs[0].changed
+        phrase = phrase or pairs[0].phrase
 
     metric = delta_for(attr, scorer=scorer, phrase=phrase, target=target)
+
+    # Gate the same region the metric reads. A frame whose object is
+    # destroyed but whose background survives passes a whole-frame gate and
+    # then maxes out an object-cropped metric -- which is how a car buried in
+    # confetti outranked every genuine identity change. The converse is just
+    # as wrong: cropping to the object before judging a scene-level metric
+    # hides the very collapse that metric is reading.
+    gate_mask = mask if attr in OBJECT_LEVEL else None
 
     raw: dict[HeadUnit, float] = {}
     rejected: set[HeadUnit] = set()
@@ -98,19 +110,24 @@ def rescore(
 
     for unit, path in _units(paths, attr).items():
         candidate = Image.open(path).convert("RGB")
-        # Gate the same region the metric measures. A frame whose object is
-        # destroyed but whose background survives passes a whole-frame gate
-        # and then maxes out an object-cropped metric -- which is how a car
-        # buried in confetti outranked every genuine identity change.
         verdict = gate.check(
-            crop_to_mask(baseline, mask), crop_to_mask(candidate, mask)
+            crop_to_mask(baseline, gate_mask), crop_to_mask(candidate, gate_mask)
         )
         if not verdict.ok:
             rejected.add(unit)
             raw[unit] = 0.0
             reasons[f"b{unit.block}_h{unit.head}"] = verdict.reason
             continue
-        raw[unit] = float(metric(baseline, candidate, mask))
+
+        if attr is AttributeClass.SIZE:
+            # Area change is only visible by re-segmenting the changed image;
+            # against one shared mask size_delta reads exactly 0 for every
+            # cell. Mirrors the SIZE branch in harness._measure_cell.
+            raw[unit] = float(
+                size_delta(baseline, candidate, mask, masker(candidate, object_label))
+            )
+        else:
+            raw[unit] = float(metric(baseline, candidate, mask))
 
     return raw, rejected, reasons
 
