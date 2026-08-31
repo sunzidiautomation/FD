@@ -37,11 +37,11 @@ from flair_t2i.heads import HeadUnit
 from flair_t2i.patching import install_head_routing, uninstall_head_routing
 from flair_t2i.pipeline import FlairPipeline
 from flair_t2i.processor import PlanRef
-from flair_t2i.routing import RoutedComponent, RoutingPlan
+from flair_t2i.metrics.latent_color import pure_latent_color_score, latent_spatial_gradient
 
 
-def compute_latent_metrics(z_base: torch.Tensor, z_swapped: torch.Tensor) -> dict[str, float]:
-    """Compute direct Latent Space similarity and difference metrics."""
+def compute_latent_metrics(z_base: torch.Tensor, z_swapped: torch.Tensor, mask: torch.Tensor | None = None) -> dict[str, float]:
+    """Compute 100% pure Latent Space color metrics without ANY VAE decoding."""
     # 1. Point-to-point Frobenius L2 distance
     diff = z_swapped - z_base
     l2_dist = torch.linalg.norm(diff).item()
@@ -53,24 +53,18 @@ def compute_latent_metrics(z_base: torch.Tensor, z_swapped: torch.Tensor) -> dic
     cos_sim = F.cosine_similarity(v_base, v_swap).item()
     cos_dist = 1.0 - cos_sim
 
-    # 3. Latent Gram Matrix Shift (16-channel covariance)
-    feat_b = z_base.squeeze(0).view(16, -1).float()   # [16, H*W]
-    feat_s = z_swapped.squeeze(0).view(16, -1).float()
-    
-    gram_b = (feat_b @ feat_b.T) / feat_b.shape[1]    # [16, 16]
-    gram_s = (feat_s @ feat_s.T) / feat_s.shape[1]
-    gram_dist = torch.linalg.norm(gram_s - gram_b).item()
-
-    # 4. Combined Color Sensitivity Score
-    combined = 0.5 * rel_l2 + 0.5 * min(1.0, gram_dist * 0.1)
+    # 3. Disentangled Pure Color Score (Gram Shift x Structural Preservation)
+    disentangled = pure_latent_color_score(z_base, z_swapped, mask=mask)
 
     return {
         "l2_distance": l2_dist,
         "relative_l2": rel_l2,
         "cosine_similarity": cos_sim,
         "cosine_distance": cos_dist,
-        "gram_matrix_shift": gram_dist,
-        "combined_color_score": combined,
+        "gram_matrix_shift": disentangled["gram_shift"],
+        "color_shift": disentangled["color_shift"],
+        "structure_preservation": disentangled["structure_preservation"],
+        "combined_color_score": disentangled["pure_color_score"],
     }
 
 
@@ -264,22 +258,23 @@ def main() -> None:
               f"Gram: {metrics['gram_matrix_shift']:.4f} | Score: {metrics['combined_color_score']:.4f} ({elapsed:.1f}s)")
 
     # --- RANKED LEADERBOARD ---
-    print("\n" + "=" * 80)
-    print(f"RANKED LATENT COLOR SENSITIVITY LEADERBOARD (Head {args.head})")
-    print("=" * 80)
-    print(f"{'Rank':<5} | {'Block':<8} | {'Combined Score':<15} | {'L2 Distance':<13} | {'Cosine Dist':<13} | {'Gram Shift':<12}")
-    print("-" * 80)
+    print("\n" + "=" * 90)
+    print(f"RANKED PURE LATENT COLOR SENSITIVITY LEADERBOARD (Head {args.head}) - NO VAE DECODER")
+    print("=" * 90)
+    print(f"{'Rank':<5} | {'Block':<8} | {'Pure Color Score':<18} | {'Color Shift':<13} | {'Shape Intact %':<16} | {'Gram Shift':<12}")
+    print("-" * 90)
 
     ranked_blocks = sorted(block_results.items(), key=lambda x: x[1]["combined_color_score"], reverse=True)
     for rank, (b_id, m) in enumerate(ranked_blocks, 1):
-        star = " ⭐ (Top Peak)" if rank == 1 else ""
-        print(f"{rank:<5} | B{b_id:<7} | {m['combined_color_score']:<15.5f} | {m['l2_distance']:<13.4f} | {m['cosine_distance']:<13.5f} | {m['gram_matrix_shift']:<12.4f}{star}")
+        star = " ⭐ (Top Disentangled Peak)" if rank == 1 else ""
+        preserv_pct = m["structure_preservation"] * 100.0
+        print(f"{rank:<5} | B{b_id:<7} | {m['combined_color_score']:<18.5f} | {m['color_shift']:<13.4f} | {preserv_pct:<15.1f}% | {m['gram_matrix_shift']:<12.4f}{star}")
 
     top_block = ranked_blocks[0][0]
     top_score = ranked_blocks[0][1]["combined_color_score"]
-    print("=" * 80)
-    print(f"🏆 BEST COLOR BLOCK ON HEAD {args.head}: Block {top_block} (Sensitivity Score: {top_score:.4f})")
-    print("=" * 80)
+    print("=" * 90)
+    print(f"🏆 BEST COLOR BLOCK ON HEAD {args.head}: Block {top_block} (Pure Color Score: {top_score:.4f})")
+    print("=" * 90)
 
     # --- BUILD VISUAL COMPARISON IMAGE ---
     print("\nBuilding comparative visualization montage...")
@@ -326,9 +321,34 @@ def main() -> None:
             canvas.paste(img, (x_left, y_img))
             draw.text((x_left + 4, y_img + 4), col_name, fill=(255, 255, 255))
 
-    out_montage = args.out / "latent_blocks_comparison.png"
-    canvas.save(out_montage)
-    print(f"\nSaved comparison montage to: {out_montage.resolve()}")
+    # Save results as structured JSON
+    import json
+    json_path = args.out / "latent_results.json"
+    clean_results = {
+        "base_prompt": args.base_prompt,
+        "swap_prompt": args.swap_prompt,
+        "head_tested": args.head,
+        "steps": args.steps,
+        "seed": args.seed,
+        "ranked_leaderboard": [
+            {
+                "rank": rank,
+                "block": b_id,
+                "pure_color_score": m["combined_color_score"],
+                "color_shift_delta_e": m["color_shift"],
+                "shape_intact_pct": round(m["structure_preservation"] * 100.0, 2),
+                "gram_matrix_shift": m["gram_matrix_shift"],
+                "l2_distance": m["l2_distance"],
+                "cosine_distance": m["cosine_distance"],
+                "time_sec": round(m.get("elapsed_time", 0.0), 2),
+            }
+            for rank, (b_id, m) in enumerate(ranked_blocks, 1)
+        ],
+        "top_block": top_block,
+        "top_score": top_score,
+    }
+    json_path.write_text(json.dumps(clean_results, indent=2), encoding="utf-8")
+    print(f"Saved structured JSON results to: {json_path.resolve()}")
 
 
 if __name__ == "__main__":
